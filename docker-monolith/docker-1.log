@@ -1,0 +1,9 @@
+REPOSITORY               TAG                 IMAGE ID            CREATED             SIZE
+dmitry/ubuntu-tmp-file   latest              1cb1bf75811a        24 seconds ago      123MB
+ubuntu                   16.04               56bab49eef2e        3 weeks ago         123MB
+nginx                    latest              231d40e811cd        3 weeks ago         126MB
+hello-world              latest              fce289e99eb9        11 months ago       1.84kB
+
+Отличия контейнера от образа:
+Чтобы создать контейнер, движок Docker берет образ, добавляет доступный для записи верхний слой и инициализирует различные параметры (сетевые порты, имя контейнера, идентификатор и лимиты ресурсов).
+
