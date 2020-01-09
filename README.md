@@ -5,6 +5,7 @@
 <a name="top"></a>
 - [HW.12 - Технология контейнеризации. Введение в Docker](#hw12)
     - [Доп. задание](#jiji1)  
+- [HW.13 - Docker-образы. Микросервисы](#hw13)
 ---
 
 <a name="hw12"></a>
@@ -316,5 +317,34 @@ $ docker diff 29eed99a817e
 # Пересоздать конт и проверить что изменения не сохранились
 $ docker stop reddit && docker rm reddit && docker run --name reddit --rm -it 4e8932235b85 bash -c ls
 
+```
+[Содержание](#top)
+
+
+---
+
+<a name="hw13"></a>
+# Домашнее задание  13
+## Docker-образы. Микросервисы
+
+[Написание Dockerfile](https://docs.docker.com/engine/reference/builder/)
+
+При сборке `image` из одинакового базового образа первая команда `build` кеширует его, а последующие уже будут собираться не с первого шага.
+
+## Задание со *
+Для запуска контейнеров с определенной переменной окружения применяется ключ `--env`. Для указания нескольких переменных, указывается либо файл со значениями, либо несколько таких ключей.
+
+Пример:
+```
+$ docker run -d --network=reddit1 --network-alias=post1_db --network-alias=comment1_db mongo:latest
+$ docker run -d --network=reddit1 --network-alias=post1 --env POST_DATABASE_HOST=post1_db playjim/post:1.0
+$ docker run -d --network=reddit1 --network-alias=comment1 --env COMMENT_DATABASE_HOST=comment1_db playjim/comment:1.0
+$ docker run -d --network=reddit1 -p 9292:9292 --env POST_SERVICE_HOST=post1 --env COMMENT_SERVICE_HOST=comment1 playjim/ui:2.0
+```
+### Создание Docker volume:
+```
+$ docker volume create reddit_db
+reddit_db
+$ docker run -d --network=reddit1 --network-alias=post1_db --network-alias=comment1_db -v reddit_db:/data/db mongo:latest
 ```
 [Содержание](#top)
