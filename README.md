@@ -6,6 +6,7 @@
 - [HW.12 - Технология контейнеризации. Введение в Docker](#hw12)
     - [Доп. задание](#jiji1)  
 - [HW.13 - Docker-образы. Микросервисы](#hw13)
+- [HW.14 - Docker: сети, docker-compose](#hw14)
 ---
 
 <a name="hw12"></a>
@@ -149,7 +150,8 @@ gcloud auth application-default login
 
 **Команда создания:** 
 ```sh
-docker-machine create <имя>
+$ export GOOGLE_PROJECT=_ваш-проект_
+$ docker-machine create --driver google --google-machine-image https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/family/ubuntu-1604-lts --google-machine-type n1-standard-1 --google-zone europe-west1-b docker-host
 ```
 **Переключение между именами:**
 ```sh
@@ -346,5 +348,72 @@ $ docker run -d --network=reddit1 -p 9292:9292 --env POST_SERVICE_HOST=post1 --e
 $ docker volume create reddit_db
 reddit_db
 $ docker run -d --network=reddit1 --network-alias=post1_db --network-alias=comment1_db -v reddit_db:/data/db mongo:latest
+```
+[Содержание](#top)
+
+<a name="hw14"></a>
+# Домашнее задание  14
+## Docker: сети, docker-compose
+
+Типы сетей в Docker:
+- none - только loopback, сеть изолирована
+- host - использует сеть хоста
+- bridge - отдельные namespaces сети ("виртуальная" сеть)
+- MacVlan - на основе сабинтерфейсов Linux, поддерка 802.1Q
+- Overlay - несколько Docker хостов в одну сеть, работает поверх VXLAN
+
+При запуске контейнера можно указать только одну сеть параметром `--network=<name>`. Для подключения дополнительных сетей к контейнерам применить команду: `docker network connect`. Также несколько сетей могут быть подключены к контейнеру при запуске, если используется `docker-compose`.
+
+[Документация Docker-compose](https://docs.docker.com/compose/)
+
+Docker-compose позволяет запускать сразу несколько контейнеров по заданному сценарию.
+
+Пример:
+```
+# docker-compose.yml
+
+version: '3.3'
+services:
+  post_db:
+    image: mongo:${TAGDB}
+    volumes:
+      - post_db:/data/db
+    networks:
+      - back_net
+  ui:
+    build: ./ui
+    image: ${USERNAME}/ui:${TAG}
+    ports:
+      - ${PORT}/tcp
+    networks:
+      - front_net
+  post:
+    build: ./post-py
+    image: ${USERNAME}/post:${TAG}
+    networks:
+      - back_net
+      - front_net
+  comment:
+    build: ./comment
+    image: ${USERNAME}/comment:${TAG}
+    networks:
+      - back_net
+      - front_net
+    
+volumes:
+  post_db:
+
+networks:
+  back_net:
+  front_net:
+```
+Значения переменных подставляется или из переменных окружения или из файла `.env`. Имя проекта `docker-compose` присваивается от имени директории, в котором он располагается. Для переопределения этого имени используется параметр `-p` или переменная `COMPOSE_PROJECT_NAME`.
+```
+# .env
+
+PORT=9292:9292
+TAG=1.0
+TAGDB=3.2
+USERNAME=playjim
 ```
 [Содержание](#top)
