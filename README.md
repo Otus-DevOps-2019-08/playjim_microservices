@@ -7,6 +7,7 @@
     - [Доп. задание](#jiji1)  
 - [HW.13 - Docker-образы. Микросервисы](#hw13)
 - [HW.14 - Docker: сети, docker-compose](#hw14)
+- [HW.15 - Устройство Gitlab CI. Построение процесса непрерывной поставки](#hw15)
 ---
 
 <a name="hw12"></a>
@@ -415,5 +416,76 @@ PORT=9292:9292
 TAG=1.0
 TAGDB=3.2
 USERNAME=playjim
+```
+[Содержание](#top)
+
+<a name="hw15"></a>
+# Домашнее задание  15
+## Устройство Gitlab CI. Построение процесса непрерывной поставки
+
+### Инсталяция Gitlab CI
+- Необходимые параметры для машины, на которой будем разворачивать Gitlab CI
+  ```sh
+  1               CPU
+  3.75GB          RAM 
+  50-100GB        HDD 
+  Ubuntu 16.04    IMAGE
+  ```
+  - В [официальной документации](https://docs.gitlab.com/ce/install/requirements.html) описаны рекомендуемые характеристики сервера 
+
+С помощью docker-machine создаем ВМ и не забываем разрешить подключение по http/https:
+```
+  $ docker-machine create --driver google \
+  --google-machine-image https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/family/ubuntu-1604-lts \
+  --google-zone europe-west1-b \
+  --google-machine-type n1-standard-1 \
+  --google-disk-size 100 \
+  gitlab-ci
+    ...
+  Docker is up and running!
+  To see how to connect your Docker Client to the Docker Engine running on this virtual machine, run: 
+  docker-machine env gitlab-ci
+
+```
+### Подготовка окружения
+- На ВМ создаем каталоги и создаем файл [docker-compose.yml](https://gist.githubusercontent.com/Lisskha/a26e4c3f6ff7d94656fd1eb6a624131b/raw/b782c399a746bc7017b97f86a0a21971bf66313e/srv%2520gitlab%2520docker-compose.yml)
+  ```sh
+  $ eval $(docker-machine env gitlab-ci)
+  $ docker-machine ssh gitlab-ci
+  
+  sudo su
+  mkdir -p /srv/gitlab/config /srv/gitlab/data /srv/gitlab/logs
+  cd /srv/gitlab/
+  vim docker-compose.yml
+  ```
+- Запускаем сборку образа и запускаем Gitlab CI (надо запускать в каталоге, где лежит docker-compose.yml)
+  ```sh
+  /srv/gitlab# docker-compose up -d
+  ```
+- Откуда взяли содержимое файла docker-compose.yml - https://docs.gitlab.com/omnibus/docker/README.html#install-gitlab-using-docker-compose  
+- Проверка  
+  http://ip-vm/
+
+## Работа с Gitlab CI
+### Настройка
+- Выкл регу новых юезров
+  - В Settings/General/Sign-up restrictions сняла галку с Sign-up enabled 
+### Создание проекта
+***Из лекции:***
+- Каждый проект в Gitlab CI принадлежит к группе проектов
+- В проекте может быть определен CI/CD пайплайн
+- Задачи (jobs), входящие в пайплайн, должны исполняться GitLab runner
+
+### Запуск раннера в контейнере
+```
+docker run -d --name gitlab-runner --restart always \
+-v /srv/gitlab-runner/config:/etc/gitlab-runner \
+-v /var/run/docker.sock:/var/run/docker.sock \
+gitlab/gitlab-runner:latest
+```
+
+### Регистрация раннера
+```
+docker exec -it gitlab-runner gitlab-runner register --run-untagged --locked=falseна runners
 ```
 [Содержание](#top)
