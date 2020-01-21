@@ -8,6 +8,7 @@
 - [HW.13 - Docker-образы. Микросервисы](#hw13)
 - [HW.14 - Docker: сети, docker-compose](#hw14)
 - [HW.15 - Устройство Gitlab CI. Построение процесса непрерывной поставки](#hw15)
+- [HW.16 - Введение в мониторинг. Системы мониторинга](#hw16)
 ---
 
 <a name="hw12"></a>
@@ -488,4 +489,130 @@ gitlab/gitlab-runner:latest
 ```
 docker exec -it gitlab-runner gitlab-runner register --run-untagged --locked=falseна runners
 ```
+[Содержание](#top)
+
+<a name="hw16"></a>
+# Домашнее задание  16
+## Введение в мониторинг. Системы мониторинга
+
+### Подготовка окружения
+Правим правила фаервола на gcp. Открываем порты для Prometheus и Puma:
+```
+$ gcloud compute firewall-rules create prometheus-default --allow tcp:9090
+$ gcloud compute firewall-rules create puma-default --allow tcp:9292 
+```
+Создадим Docker хост в GCE и настроим локальное окружение на работу с ним:
+```
+$ export GOOGLE_PROJECT=_ваш-проект_
+
+# create docker host
+docker-machine create --driver google \
+    --google-machine-image https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/family/ubuntu-1604-lts \
+    --google-machine-type n1-standard-1 \
+    --google-zone europe-west1-b \
+    docker-host
+
+# configure local env
+eval $(docker-machine env docker-host)
+```
+Систему мониторинга Prometheus будем запускать внутри
+Docker контейнера. Для начального знакомства воспользуемся
+готовым образом с DockerHub.
+```
+$ docker run --rm -p 9090:9090 -d --name prometheus prom/prometheus:v2.1.0 
+$ docker ps 
+```
+Открываем веб интерфейс. По умолчанию сервер слушает на порту 9090. Чтобы узнать ip созданной ВМ, используем команду:
+```
+$ docker-machine ip docker-host
+```
+Соберем на основе готового образа с DockerHub свой Docker образ с конфигурацией для мониторинга наших микросервисов. 
+Создайте директорию monitoring/prometheus. Затем в этой директории создайте простой Dockerfile, который будет копировать файл конфигурации с нашей машины внутрь контейнера:
+```
+#monitoring/prometheus/Dockerfile
+
+FROM prom/prometheus:v2.1.0
+ADD prometheus.yml /etc/prometheus/
+```
+Мы определим простой конфигурационный файл для сбора метрик с наших микросервисов. В директории *monitoring/prometheus* создайте файл **prometheus.yml** со следующим cодержимым:
+```
+---
+global:
+  scrape_interval: '5s'
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets:
+        - 'localhost:9090'
+
+  - job_name: 'ui'
+    static_configs:
+      - targets:
+        - 'ui:9292'
+
+  - job_name: 'comment'
+    static_configs:
+      - targets:
+        - 'comment:9292'
+```
+В директории *prometheus* собираем Docker образ:
+```
+$ export USER_NAME=playjim
+$ docker build -t $USER_NAME/prometheus .
+```
+Где USER_NAME - ВАШ логин от DockerHub. 
+
+В коде микросервисов есть healthcheck-и для проверки работоспособности приложения. Сборку образов теперь необходимо производить при помощи скриптов **docker_build.sh**, которые есть в директории каждого сервиса. С его помощью мы добавим информацию из Git в наш healthcheck. 
+
+Выполните сборку образов при помощи скриптов docker_build.sh в директории каждого сервиса.
+```
+/src/ui $ bash docker_build.sh
+/src/post-py $ bash docker_build.sh
+/src/comment $ bash docker_build.sh
+```
+Или сразу все из корня репозитория:
+```
+for i in ui post-py comment; do cd src/$i; bash docker_build.sh; cd -; done
+```
+Будем поднимать наш Prometheus совместно с микросервисами. Определите в вашем *docker/docker-compose.yml* файле новый сервис.
+```
+services:
+...
+  prometheus:
+    image: ${USERNAME}/prometheus
+    networks:
+      - back_net
+      - front_net
+    ports:
+      - '9090:9090'
+    volumes:
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention=1d'
+
+volumes:
+  prometheus_data:
+``` 
+Не забываем добавить секцию networks для сервиса **prometheus**, чтобы он смог общаться со всеми серверами.
+
+### Node exporter
+Воспользуемся [Node_exporter](https://github.com/prometheus/node_exporter) для сбора информации о работе Docker хоста (виртуалки, где у нас запущены контейнеры)и предоставлению этой информации в Prometheus. 
+
+### Пуш образов на DockerHub
+Запушим собранные вами образы на DockerHub:
+```
+$ docker login
+Login Succeeded
+$ docker push $USER_NAME/ui
+$ docker push $USER_NAME/comment
+$ docker push $USER_NAME/post
+$ docker push $USER_NAME/prometheus 
+``` 
+Ссылка на мой профиль в DockerHub: https://hub.docker.com/u/playjim
+
+to do Запушить докер образ
+
 [Содержание](#top)
