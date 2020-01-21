@@ -613,6 +613,4 @@ $ docker push $USER_NAME/prometheus
 ``` 
 Ссылка на мой профиль в DockerHub: https://hub.docker.com/u/playjim
 
-to do Запушить докер образ
-
 [Содержание](#top)
