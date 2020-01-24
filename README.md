@@ -9,6 +9,7 @@
 - [HW.14 - Docker: сети, docker-compose](#hw14)
 - [HW.15 - Устройство Gitlab CI. Построение процесса непрерывной поставки](#hw15)
 - [HW.16 - Введение в мониторинг. Системы мониторинга](#hw16)
+- [HW.17 - Мониторинг приложения и инфраструктуры](#hw17)
 ---
 
 <a name="hw12"></a>
@@ -612,5 +613,174 @@ $ docker push $USER_NAME/post
 $ docker push $USER_NAME/prometheus 
 ``` 
 Ссылка на мой профиль в DockerHub: https://hub.docker.com/u/playjim
+
+[Содержание](#top)
+
+<a name="hw17"></a>
+# Домашнее задание 17
+## Мониторинг приложения и инфраструктуры
+
+Сначала создаем на GCP ВМ с докером.
+```
+$ export GOOGLE_PROJECT=_ваш-проект_
+
+# Создать докер хост
+docker-machine create --driver google \
+    --google-machine-image https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/family/ubuntu-1604-lts \
+    --google-machine-type n1-standard-1 \
+    --google-zone europe-west1-b \
+    docker-host
+
+# Настроить докер клиент на удаленный докер демон
+eval $(docker-machine env docker-host)
+
+# Переключение на локальный докер
+eval $(docker-machine env --unset)
+
+$ docker-machine ip docker-host
+
+$ docker-machine rm docker-host
+```
+Оставим описание приложений в **docker-compose.yml**, а мониторинг выделим в отдельный файл **docker-compose-monitoring.yml**.
+Для запуска приложений будем как и ранее использовать`docker-compose up -d`, а для мониторинга - ` docker-compose -f docker-compose-monitoring.yml up -d`
+
+Мы будем использовать [cAdvisor](https://github.com/google/cadvisor) для наблюдения за состоянием наших Docker контейнеров.
+cAdvisor собирает информацию о ресурсах потребляемых контейнерами и характеристиках их работы.
+
+Добавим информацию о новом сервисе в конфигурацию Prometheus, чтобы он начал собирать метрики:
+```
+scrape_configs:
+...
+  - job_name: 'cadvisor'
+    static_configs:
+    - targets:
+      - 'cadvisor:8080'
+```
+
+Пересоберем образ Prometheus с обновленной конфигурацией:
+```
+$ export USER_NAME=username # где username - ваш логин на Docker Hub
+$ docker build -t $USER_NAME/prometheus .
+```
+
+Не забываем открыть порты:
+```
+$ gcloud compute firewall-rules create prometheus-default --allow tcp:9090
+$ gcloud compute firewall-rules create puma-default --allow tcp:9292
+$ gcloud compute firewall-rules create cadvisor-default --allow tcp:8080
+
+```
+Запустим сервисы:
+```
+$ docker-compose up -d
+$ docker-compose -f docker-compose-monitoring.yml up -d
+```
+cAdvisor имеет UI, в котором отображается собираемая о контейнерах информация.
+Откроем страницу Web UI по адресу http://<docker-machinehost-ip>:8080
+
+### Визуализация метрик: Grafana
+Используем инструмент Grafana для визуализации данных из Prometheus.
+Добавим новый сервис в **docker-compose-monitoring.yml**:
+```
+  grafana:
+    image: grafana/grafana:5.0.0
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=secret
+    depends_on:
+      - prometheus
+    ports:
+      - 3000:3000
+    networks:
+      - front_net
+      - back_net
+
+volumes:
+  grafana_data:
+```
+Внесем правки в правила firewall gcp:
+```
+$ gcloud compute firewall-rules create grafana-default --allow tcp:3000
+```
+Alertmanager - дополнительный компонент для системы мониторинга Prometheus, который отвечает за первичную обработку алертов и дальнейшую отправку оповещений по заданному назначению. Создайте новую директорию monitoring/alertmanager. В этой директории создайте **Dockerfile** со следующим содержимым:
+```
+FROM prom/alertmanager:v0.14.0
+ADD config.yml /etc/alertmanager/
+```
+Настройки Alertmanager-а как и Prometheus задаются через YAML файл или опции командой строки. В директории monitoring/alertmanager создайте файл config.yml, в котором определите отправку нотификаций в ВАШ тестовый слак канал. Для отправки нотификаций в слак канал потребуется создать СВОЙ Incoming Webhook monitoring/alertmanager/config.yml:
+```
+global:
+  slack_api_url: 'https://hooks.slack.com/services/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'
+
+route:
+  receiver: 'slack-notifications'
+
+receivers:
+- name: 'slack-notifications'
+  slack_configs:
+  - channel: '#dmitry_borisov'
+
+```
+1. Соберем образ alertmanager:
+```
+monitoring/alertmanager $ docker build -t $USER_NAME/alertmanager .
+```
+2. Добавим новый сервис в компоуз файл мониторинга. Не забудьте
+добавить его в одну сеть с сервисом Prometheus:
+```
+services:
+...
+alertmanager:
+  image: ${USER_NAME}/alertmanager
+  command:
+    - '--config.file=/etc/alertmanager/config.yml'
+  ports:
+    - 9093:9093
+  networks:
+    - front_net
+    - back_net
+```
+
+Создадим файл **alerts.yml** в директории prometheus, в котором определим условия при которых должен срабатывать алерт и посылаться Alertmanager-у. Мы создадим простой алерт, который будет срабатывать в ситуации, когда одна из наблюдаемых систем (endpoint) недоступна для сбора метрик (в этом случае метрика up с лейблом instance равным имени данного эндпоинта будет равна нулю).
+
+**monitoring/prometheus/alerts.yml**:
+```
+groups:
+  - name: alert.rules
+    rules:
+    - alert: InstanceDown
+      expr: up == 0
+      for: 1m
+      labels:
+        severity: page
+      annotations:
+        description: '{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 1 minute'
+        summary: 'Instance {{ $labels.instance }} down'
+```
+Добавим операцию копирования данного файла в Dockerfile:
+**monitoring/prometheus/Dockerfile**:
+```
+FROM prom/prometheus:v2.1.0
+ADD prometheus.yml /etc/prometheus/
+ADD alerts.yml /etc/prometheus/
+```
+**prometheus.yml**:
+```
+rule_files:
+  - "alerts.yml"
+
+alerting:
+  alertmanagers:
+  - scheme: http
+    static_configs:
+    - targets:
+      - "alertmanager:9093"
+```
+Пересоберем образ Prometheus.
+
+Ссылка на мой профиль DockerHub:
+https://hub.docker.com/u/playjim
 
 [Содержание](#top)
