@@ -10,6 +10,7 @@
 - [HW.15 - Устройство Gitlab CI. Построение процесса непрерывной поставки](#hw15)
 - [HW.16 - Введение в мониторинг. Системы мониторинга](#hw16)
 - [HW.17 - Мониторинг приложения и инфраструктуры](#hw17)
+- [HW.18 - ЛЛогирование и распределенная трассировка](#hw18)
 ---
 
 <a name="hw12"></a>
@@ -782,5 +783,89 @@ alerting:
 
 Ссылка на мой профиль DockerHub:
 https://hub.docker.com/u/playjim
+
+[Содержание](#top)
+
+<a name="hw18"></a>
+# Домашнее задание 18
+## Логирование и распределенная трассировка
+
+Создаем Docker хост в GCE:
+```
+$ export GOOGLE_PROJECT=docker-xxxxxx
+
+$ docker-machine create --driver google --google-machine-image https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/family/ubuntu-1604-lts --google-machine-type n1-standard-1 --google-open-port 5601/tcp --google-open-port 9292/tcp --google-open-port 9411/tcp logging
+
+$ eval $(docker-machine env logging)
+
+$ docker-machine ip logging
+```
+Обновив код в директории /src выполняем сборку образов ui, post-py, comment:
+```
+export USER_NAME=playjim
+
+/src/ui $ bash docker_build.sh && docker push $USER_NAME/ui
+/src/post-py $ bash docker_build.sh && docker push $USER_NAME/post
+/src/comment $ bash docker_build.sh && docker push $USER_NAME/comment
+```
+Или сразу все из корня репозитория:
+```
+for i in ui post-py comment; do cd src/$i; bash docker_build.sh; cd -; done
+```
+Как упоминалось на лекции хранить все логи стоит централизованно: на одном (нескольких) серверах. В этом ДЗ мы рассмотрим пример системы централизованного логирования на примере Elastic стека (ранее известного как ELK): который включает в себя 3 осовных компонента:
+ - ElasticSearch (TSDB и поисковый движок для хранения данных)
+ - Logstash (для агрегации и трансформации данных)
+ - Kibana (для визуализации)
+Однако для агрегации логов вместо Logstash мы будем использовать Fluentd, таким образом получая еще одно популярное сочетание этих инструментов, получившее название EFK
+
+Для нашей системы логирования создаем отдельный compose-файл **docker/docker-compose-logging.yml**:
+```
+version: '3.3'
+services:
+  zipkin:
+    image: openzipkin/zipkin
+    ports:
+      - "9411:9411"
+    networks:
+      - front_net
+      - back_net
+
+  fluentd:
+    image: ${USERNAME}/fluentd
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+
+  elasticsearch:
+    image: elasticsearch:7.5.0
+    container_name: elasticsearch
+    environment:
+      - xpack.security.enabled=false
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    expose:
+      - 9200
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+
+  kibana:
+    image: kibana:7.5.0
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+
+networks:
+  front_net:
+  back_net:
+```
 
 [Содержание](#top)
