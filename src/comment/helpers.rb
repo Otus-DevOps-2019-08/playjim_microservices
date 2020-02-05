@@ -1,10 +1,4 @@
-def obj_id(val)
-  begin
-    BSON::ObjectId.from_string(val)
-  rescue BSON::ObjectId::Invalid
-    nil
-  end
-end
+
 
 def document_by_id(id)
   id = obj_id(id) if String === id
