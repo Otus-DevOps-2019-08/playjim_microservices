@@ -10,7 +10,8 @@
 - [HW.15 - Устройство Gitlab CI. Построение процесса непрерывной поставки](#hw15)
 - [HW.16 - Введение в мониторинг. Системы мониторинга](#hw16)
 - [HW.17 - Мониторинг приложения и инфраструктуры](#hw17)
-- [HW.18 - ЛЛогирование и распределенная трассировка](#hw18)
+- [HW.18 - Логирование и распределенная трассировка](#hw18)
+- [HW.19 - Kubernetes - The Hard Way](#hw19)
 ---
 
 <a name="hw12"></a>
@@ -867,5 +868,97 @@ networks:
   front_net:
   back_net:
 ```
+
+[Содержание](#top)
+
+<a name="hw18"></a>
+# Домашнее задание 19
+## Kubernetes - The Hard Way
+
+Опишем приложение в контексте Kubernetes с помощью manifest-ов в YAML-формате. Основным примитивом будет Deployment. Основные задачи сущности Deployment:      
+ - Создание Replication Controller-а (следит, чтобы число запущенных Pod-ов соответствовало описанному);
+ - Ведение истории версий запущенных Pod-ов (для различных стратегий деплоя, для возможностей отката);
+ - Описание процесса деплоя (стратегия, параметры стратегий).
+
+**post-deployment.yml**:
+```
+---
+apiVersion: apps/v1beta2
+kind: Deployment
+metadata:
+  name: post-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: post
+  template:
+    metadata:
+      name: post
+      labels:
+        app: post
+    spec:
+      containers:
+      - image: chromko/post
+        name: post
+```
+Также я опишу **comment-deployment.yml**, **mongo-deployment.yml**, **ui-deployment.yml**;
+
+# [Kubernetes The Hard Way](https://github.com/kelseyhightower/kubernetes-the-hard-way)
+Для практики и в качестве обучения я пройду ["Kubernetes The Hard Way"](https://github.com/kelseyhightower/kubernetes-the-hard-way).
+
+## Запуск команд параллельно с tmux
+
+[tmux] (https://github.com/tmux/tmux/wiki) можно использовать для одновременного запуска команд на нескольких экземплярах вычислений. Лабораторные работы в этом руководстве могут потребовать выполнения одних и тех же команд для нескольких вычислительных экземпляров, в этих случаях рассмотрите возможность использования tmux и разбиения окна на несколько панелей с включенными синхронизирующими панелями, чтобы ускорить процесс подготовки.
+
+> Разделить окно вертикально `ctrl + b "` 
+> Разделить окно горизонтально `ctrl + b %`
+> Включите синхронизацию, нажав `ctrl + b`, а затем` shift +: `. Далее введите `setw synchronize-panes on` в командной строке. Чтобы отключить синхронизацию: `setw synchronize-panes off`.
+Для управления мышью нужно создать конфиг ~/.tmux.conf:
+```
+set-option -g -q mouse on
+bind-key -T root WheelUpPane if-shell -F -t = "#{alternate_on}" "send-keys -M" "select-pane -t =; copy-mode -e; send-keys -M"
+bind-key -T root WheelDownPane if-shell -F -t = "#{alternate_on}" "send-keys -M" "select-pane -t =; send-keys -M"
+```
+## Установка необходимых клиентских интсрументов
+
+Утилиты командной строки `cfssl` и` cfssljson` будут использоваться для обеспечения [инфраструктуры PKI](https://en.wikipedia.org/wiki/Public_key_infrastructure) и создания сертификатов TLS.
+
+The `kubectl` command line utility is used to interact with the Kubernetes API Server.
+
+## Настройка gcp и выделение ресурсов под кластер
+Создаю `kubernetes-the-hard-way` пользовательскую сеть VPC:
+```
+gcloud compute networks create kubernetes-the-hard-way --subnet-mode custom
+```
+A [subnet](https://cloud.google.com/compute/docs/vpc/#vpc_networks_and_subnets) must be provisioned with an IP address range large enough to assign a private IP address to each node in the Kubernetes cluster.
+```
+gcloud compute networks subnets create kubernetes \
+  --network kubernetes-the-hard-way \
+  --range 10.240.0.0/24
+```
+## Правила брандмауэра
+Создаю правило брандмауэра, которое разрешает внутреннюю связь по всем протоколам:
+```
+gcloud compute firewall-rules create kubernetes-the-hard-way-allow-internal \
+  --allow tcp,udp,icmp \
+  --network kubernetes-the-hard-way \
+  --source-ranges 10.240.0.0/24,10.200.0.0/16
+```
+Создаю правило брандмауэра, которое разрешает внешний SSH, ICMP и HTTPS:
+```
+gcloud compute firewall-rules create kubernetes-the-hard-way-allow-external \
+  --allow tcp:22,tcp:6443,icmp \
+  --network kubernetes-the-hard-way \
+  --source-ranges 0.0.0.0/0
+```
+## Публичный ip-адрес k8s
+Выделяю статический IP-адрес, который будет подключен к внешнему балансировщику нагрузки на серверах API Kubernetes:
+```
+gcloud compute addresses create kubernetes-the-hard-way \
+  --region $(gcloud config get-value compute/region)
+```
+## Compute instances
+
 
 [Содержание](#top)
