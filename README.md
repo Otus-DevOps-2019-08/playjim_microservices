@@ -10,7 +10,8 @@
 - [HW.15 - Устройство Gitlab CI. Построение процесса непрерывной поставки](#hw15)
 - [HW.16 - Введение в мониторинг. Системы мониторинга](#hw16)
 - [HW.17 - Мониторинг приложения и инфраструктуры](#hw17)
-- [HW.18 - ЛЛогирование и распределенная трассировка](#hw18)
+- [HW.18 - Логирование и распределенная трассировка](#hw18)
+- [HW.19 - Kubernetes - The Hard Way](#hw19)
 ---
 
 <a name="hw12"></a>
@@ -866,6 +867,1755 @@ services:
 networks:
   front_net:
   back_net:
+```
+
+[Содержание](#top)
+
+<a name="hw18"></a>
+# Домашнее задание 19
+## Kubernetes - The Hard Way
+
+Опишем приложение в контексте Kubernetes с помощью manifest-ов в YAML-формате. Основным примитивом будет Deployment. Основные задачи сущности Deployment:      
+ - Создание Replication Controller-а (следит, чтобы число запущенных Pod-ов соответствовало описанному);
+ - Ведение истории версий запущенных Pod-ов (для различных стратегий деплоя, для возможностей отката);
+ - Описание процесса деплоя (стратегия, параметры стратегий).
+
+**post-deployment.yml**:
+```
+---
+apiVersion: apps/v1beta2
+kind: Deployment
+metadata:
+  name: post-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: post
+  template:
+    metadata:
+      name: post
+      labels:
+        app: post
+    spec:
+      containers:
+      - image: chromko/post
+        name: post
+```
+Также я опишу **comment-deployment.yml**, **mongo-deployment.yml**, **ui-deployment.yml**;
+
+# [Kubernetes The Hard Way](https://github.com/kelseyhightower/kubernetes-the-hard-way)
+Для практики и в качестве обучения я пройду ["Kubernetes The Hard Way"](https://github.com/kelseyhightower/kubernetes-the-hard-way).
+
+## Запуск команд параллельно с tmux
+
+[tmux] (https://github.com/tmux/tmux/wiki) можно использовать для одновременного запуска команд на нескольких экземплярах вычислений. Лабораторные работы в этом руководстве могут потребовать выполнения одних и тех же команд для нескольких вычислительных экземпляров, в этих случаях рассмотрите возможность использования tmux и разбиения окна на несколько панелей с включенными синхронизирующими панелями, чтобы ускорить процесс подготовки.
+
+> Разделить окно вертикально `ctrl + b "` 
+> Разделить окно горизонтально `ctrl + b %`
+> Включите синхронизацию, нажав `ctrl + b`, а затем` shift +: `. Далее введите `setw synchronize-panes on` в командной строке. Чтобы отключить синхронизацию: `setw synchronize-panes off`.
+Для управления мышью нужно создать конфиг ~/.tmux.conf:
+```
+set-option -g -q mouse on
+bind-key -T root WheelUpPane if-shell -F -t = "#{alternate_on}" "send-keys -M" "select-pane -t =; copy-mode -e; send-keys -M"
+bind-key -T root WheelDownPane if-shell -F -t = "#{alternate_on}" "send-keys -M" "select-pane -t =; send-keys -M"
+```
+## Установка необходимых клиентских интсрументов
+
+Утилиты командной строки `cfssl` и` cfssljson` будут использоваться для обеспечения [инфраструктуры PKI](https://en.wikipedia.org/wiki/Public_key_infrastructure) и создания сертификатов TLS.
+
+The `kubectl` command line utility is used to interact with the Kubernetes API Server.
+
+## Настройка gcp и выделение ресурсов под кластер
+Создаю `kubernetes-the-hard-way` пользовательскую сеть VPC:
+```
+gcloud compute networks create kubernetes-the-hard-way --subnet-mode custom
+```
+A [subnet](https://cloud.google.com/compute/docs/vpc/#vpc_networks_and_subnets) must be provisioned with an IP address range large enough to assign a private IP address to each node in the Kubernetes cluster.
+```
+gcloud compute networks subnets create kubernetes \
+  --network kubernetes-the-hard-way \
+  --range 10.240.0.0/24
+```
+## Правила брандмауэра
+Создаю правило брандмауэра, которое разрешает внутреннюю связь по всем протоколам:
+```
+gcloud compute firewall-rules create kubernetes-the-hard-way-allow-internal \
+  --allow tcp,udp,icmp \
+  --network kubernetes-the-hard-way \
+  --source-ranges 10.240.0.0/24,10.200.0.0/16
+```
+Создаю правило брандмауэра, которое разрешает внешний SSH, ICMP и HTTPS:
+```
+gcloud compute firewall-rules create kubernetes-the-hard-way-allow-external \
+  --allow tcp:22,tcp:6443,icmp \
+  --network kubernetes-the-hard-way \
+  --source-ranges 0.0.0.0/0
+```
+## Публичный ip-адрес k8s
+Выделяю статический IP-адрес, который будет подключен к внешнему балансировщику нагрузки на серверах API Kubernetes:
+```
+gcloud compute addresses create kubernetes-the-hard-way \
+  --region $(gcloud config get-value compute/region)
+```
+## Compute instances
+### Kubernetes Controllers
+Создаю три вычислительных экземпляра, в которых будет размещена плоскость управления Kubernetes:
+```
+for i in 0 1 2; do
+  gcloud compute instances create controller-${i} \
+    --async \
+    --boot-disk-size 200GB \
+    --can-ip-forward \
+    --image-family ubuntu-1804-lts \
+    --image-project ubuntu-os-cloud \
+    --machine-type n1-standard-1 \
+    --private-network-ip 10.240.0.1${i} \
+    --scopes compute-rw,storage-ro,service-management,service-control,logging-write,monitoring \
+    --subnet kubernetes \
+    --tags kubernetes-the-hard-way,controller
+done
+```
+### Kubernetes Workers
+Каждому рабочему экземпляру требуется выделение подсети pod из диапазона CIDR кластера Kubernetes. Выделение подсети под будет использоваться для настройки сети контейнера в дальнейшем упражнении.`pod-cidr` Метаданные экземпляра будет использоваться , чтобы выставить стручок подсеть распределения в случаи вычислительных во время выполнения.
+
+Создаю три вычислительных экземпляра, в которых будут размещаться workerы Kubernetes:
+```
+for i in 0 1 2; do
+  gcloud compute instances create worker-${i} \
+    --async \
+    --boot-disk-size 200GB \
+    --can-ip-forward \
+    --image-family ubuntu-1804-lts \
+    --image-project ubuntu-os-cloud \
+    --machine-type n1-standard-1 \
+    --metadata pod-cidr=10.200.${i}.0/24 \
+    --private-network-ip 10.240.0.2${i} \
+    --scopes compute-rw,storage-ro,service-management,service-control,logging-write,monitoring \
+    --subnet kubernetes \
+    --tags kubernetes-the-hard-way,worker
+done
+```
+### Настройка доступа по SSH
+Для подключения к экземплярам я буду использовать ssh.
+```
+gcloud compute ssh controller-0
+```
+## Provisioning a CA and Generating TLS Certificates
+
+### Certificate Authority  
+<details>
+<summary> Генерим CA конф файл, серт и приватный ключ</summary>
+<p>
+ 
+```sh
+$ cat > ca-config.json <<EOF
+{
+  "signing": {
+    "default": {
+      "expiry": "8760h"
+    },
+    "profiles": {
+      "kubernetes": {
+        "usages": ["signing", "key encipherment", "server auth", "client auth"],
+        "expiry": "8760h"
+      }
+    }
+  }
+}
+EOF
+
+$ cat > ca-csr.json <<EOF
+{
+  "CN": "Kubernetes",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "Kubernetes",
+      "OU": "CA",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+
+# Генерим серт и ключ
+$ cfssl gencert -initca ca-csr.json | cfssljson -bare ca
+
+# Результат
+$ ll
+-rw-------    ca-key.pem
+-rw-r--r--    ca.pem
+```
+</p>
+</details> 
+
+### Client and Server Certificates
+Генерим клиентские и серверные сертификаты для каждого компонента Kubernetes и клиентский сертификат для админа Kubernetes
+  
+<details>
+<summary> The Admin Client Certificate </summary>
+<p>
+
+```sh
+cat > admin-csr.json <<EOF
+{
+  "CN": "admin",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "system:masters",
+      "OU": "Kubernetes The Hard Way",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+
+# Генерим серт и ключ
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -profile=kubernetes \
+  admin-csr.json | cfssljson -bare admin
+
+# Результат
+-rw-------   admin-key.pem
+-rw-r--r--   admin.pem
+```
+
+</p>
+</details>  
+
+<details>
+<summary> The Kubelet Client Certificates </summary>
+<p>
+
+```sh
+for instance in worker-0 worker-1 worker-2; do
+cat > ${instance}-csr.json <<EOF
+{
+  "CN": "system:node:${instance}",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "system:nodes",
+      "OU": "Kubernetes The Hard Way",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+
+EXTERNAL_IP=$(gcloud compute instances describe ${instance} \
+  --format 'value(networkInterfaces[0].accessConfigs[0].natIP)')
+
+INTERNAL_IP=$(gcloud compute instances describe ${instance} \
+  --format 'value(networkInterfaces[0].networkIP)')
+
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -hostname=${instance},${EXTERNAL_IP},${INTERNAL_IP} \
+  -profile=kubernetes \
+  ${instance}-csr.json | cfssljson -bare ${instance}
+done
+
+# Результат
+-rw-------   worker-0-key.pem
+-rw-r--r--   worker-0.pem
+-rw-------   worker-1-key.pem
+-rw-r--r--   worker-1.pem
+-rw-------   worker-2-key.pem
+-rw-r--r--   worker-2.pem
+```
+
+</p>
+</details>  
+
+<details>
+<summary> The Controller Manager Client Certificate </summary>
+<p>
+
+```sh
+cat > kube-controller-manager-csr.json <<EOF
+{
+  "CN": "system:kube-controller-manager",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "system:kube-controller-manager",
+      "OU": "Kubernetes The Hard Way",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+
+# Генерим серт и ключ
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -profile=kubernetes \
+  kube-controller-manager-csr.json | cfssljson -bare kube-controller-manager
+
+# Результат
+-rw-------   kube-controller-manager-key.pem
+-rw-r--r--   kube-controller-manager.pem
+```
+
+</p>
+</details>  
+
+<details>
+<summary> The Kube Proxy Client Certificate </summary>
+<p>
+
+```sh
+cat > kube-proxy-csr.json <<EOF
+{
+  "CN": "system:kube-proxy",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "system:node-proxier",
+      "OU": "Kubernetes The Hard Way",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+
+# Генерим серт и ключ
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -profile=kubernetes \
+  kube-proxy-csr.json | cfssljson -bare kube-proxy
+
+# Результат
+-rw-------   kube-proxy-key.pem
+-rw-r--r--   kube-proxy.pem
+```
+
+</p>
+</details>  
+
+<details>
+<summary> The Scheduler Client Certificate </summary>
+<p>
+
+```sh
+cat > kube-scheduler-csr.json <<EOF
+{
+  "CN": "system:kube-scheduler",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "system:kube-scheduler",
+      "OU": "Kubernetes The Hard Way",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+
+# Генерим серт и ключ
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -profile=kubernetes \
+  kube-scheduler-csr.json | cfssljson -bare kube-scheduler
+
+# Результат
+-rw-------   kube-scheduler-key.pem
+-rw-r--r--   kube-scheduler.pem
+```
+
+</p>
+</details>  
+
+<details>
+<summary> The Kubernetes API Server Certificate </summary>
+<p>
+
+```sh
+# Вытащить статик ип из GCE
+KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes-the-hard-way \
+  --region $(gcloud config get-value compute/region) \
+  --format 'value(address)')
+
+KUBERNETES_HOSTNAMES=kubernetes,kubernetes.default,kubernetes.default.svc,kubernetes.default.svc.cluster,kubernetes.svc.cluster.local
+
+cat > kubernetes-csr.json <<EOF
+{
+  "CN": "kubernetes",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "Kubernetes",
+      "OU": "Kubernetes The Hard Way",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+
+# Генерим серт и ключ
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -hostname=10.32.0.1,10.240.0.10,10.240.0.11,10.240.0.12,${KUBERNETES_PUBLIC_ADDRESS},127.0.0.1,${KUBERNETES_HOSTNAMES} \
+  -profile=kubernetes \
+  kubernetes-csr.json | cfssljson -bare kubernetes
+
+# Результат
+-rw-------   kubernetes-key.pem
+-rw-r--r--   kubernetes.pem
+```
+
+</p>
+</details> 
+
+> The kubernetes-the-hard-way static IP address will be included in the list of subject alternative names for the Kubernetes API Server certificate. This will ensure the certificate can be validated by remote clients.  
+
+> The Kubernetes API server is automatically assigned the kubernetes internal dns name, which will be linked to the first IP address (10.32.0.1) from the address range (10.32.0.0/24) reserved for internal cluster services during the [control plane bootstrapping](https://github.com/kelseyhightower/kubernetes-the-hard-way/blob/master/docs/08-bootstrapping-kubernetes-controllers.md#configure-the-kubernetes-api-server) lab.
+
+<details>
+<summary> The Service Account Key Pair </summary>
+<p>
+
+```sh
+cat > service-account-csr.json <<EOF
+{
+  "CN": "service-accounts",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "US",
+      "L": "Portland",
+      "O": "Kubernetes",
+      "OU": "Kubernetes The Hard Way",
+      "ST": "Oregon"
+    }
+  ]
+}
+EOF
+
+# Генерим серт и ключ
+cfssl gencert \
+  -ca=ca.pem \
+  -ca-key=ca-key.pem \
+  -config=ca-config.json \
+  -profile=kubernetes \
+  service-account-csr.json | cfssljson -bare service-account
+
+# Результат
+-rw-------   service-account-key.pem
+-rw-r--r--   service-account.pem
+```
+
+</p>
+</details>  
+
+### Distribute the Client and Server Certificates
+- Копируем серты и ключи на воркеры
+```sh
+for instance in worker-0 worker-1 worker-2; do
+  gcloud compute scp ca.pem ${instance}-key.pem ${instance}.pem ${instance}:~/
+done
+```
+- Копируем серты и ключи на контроллеры
+```sh
+for instance in controller-0 controller-1 controller-2; do
+  gcloud compute scp ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem \
+    service-account-key.pem service-account.pem ${instance}:~/
+done
+```
+## Генерация конфигурационных файлов Kubernetes для аутентификации
+### Client Authentication Configs
+Будем генерить kubeconfig файлы для `controller manager`, `kubelet`, `kube-proxy`, планировщика и админа.  
+- **`Kubernetes Public IP Address`**  
+  Каждому kubeconfig нужно канекаться к Kubernetes API Server. Для доступности заасайним статик ip на внешний LB за которым будет Kubernetes API Servers
+    - Извлечь статик IP
+      ```sh
+      KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes-the-hard-way \
+      --region $(gcloud config get-value compute/region) \
+      --format 'value(address)')
+      ```
+- **`The kubelet Kubernetes Configuration File`**  
+  При создании файлов kubeconfig для Kubelets должен использоваться сертификат клиента, соответствующий имени узла Kubelet. Тогда будет норм работать Kubernetes [Node Authorizer](https://kubernetes.io/docs/reference/access-authn-authz/node/)  
+  > Команды нужно запускать в той же дире, где генерили серты в разделе [Provisioning a CA and Generating TLS Certificates](#Provisioning-a-CA-and-Generating-TLS-Certificates) 
+    - Генерация kubeconfig файлов для каждого воркера
+      ```sh
+      for instance in worker-0 worker-1 worker-2; do kubectl config set-cluster kubernetes-the-hard-way \
+      --certificate-authority=ca.pem \
+      --embed-certs=true \
+      --server=https://${KUBERNETES_PUBLIC_ADDRESS}:6443 \
+      --kubeconfig=${instance}.kubeconfig
+
+      kubectl config set-credentials system:node:${instance} \
+      --client-certificate=${instance}.pem \
+      --client-key=${instance}-key.pem \
+      --embed-certs=true \
+      --kubeconfig=${instance}.kubeconfig
+
+      kubectl config set-context default \
+      --cluster=kubernetes-the-hard-way \
+      --user=system:node:${instance} \
+      --kubeconfig=${instance}.kubeconfig
+
+      kubectl config use-context default --kubeconfig=${instance}.kubeconfig
+      done
+      ```
+    - Создались файлы
+      ```
+      -rw-------   worker-0.kubeconfig
+      -rw-------   worker-1.kubeconfig
+      -rw-------   worker-2.kubeconfig
+      ```
+- **`The kube-proxy Kubernetes Configuration File`**
+  - Генерация kubeconfig файла для kube-proxy
+    ```sh
+    kubectl config set-cluster kubernetes-the-hard-way \
+    --certificate-authority=ca.pem \
+    --embed-certs=true \
+    --server=https://${KUBERNETES_PUBLIC_ADDRESS}:6443 \
+    --kubeconfig=kube-proxy.kubeconfig
+
+    kubectl config set-credentials system:kube-proxy \
+    --client-certificate=kube-proxy.pem \
+    --client-key=kube-proxy-key.pem \
+    --embed-certs=true \
+    --kubeconfig=kube-proxy.kubeconfig
+
+    kubectl config set-context default \
+    --cluster=kubernetes-the-hard-way \
+    --user=system:kube-proxy \
+    --kubeconfig=kube-proxy.kubeconfig
+
+    kubectl config use-context default --kubeconfig=kube-proxy.kubeconfig
+    ``` 
+  - Создался файл
+    ```
+    -rw-------   kube-proxy.kubeconfig
+    ```
+- **`The kube-controller-manager Kubernetes Configuration File`**
+  - Генерим kubeconfig для kube-controller-manager
+    ```sh
+    kubectl config set-cluster kubernetes-the-hard-way \
+    --certificate-authority=ca.pem \
+    --embed-certs=true \
+    --server=https://127.0.0.1:6443 \
+    --kubeconfig=kube-controller-manager.kubeconfig
+
+    kubectl config set-credentials system:kube-controller-manager \
+    --client-certificate=kube-controller-manager.pem \
+    --client-key=kube-controller-manager-key.pem \
+    --embed-certs=true \
+    --kubeconfig=kube-controller-manager.kubeconfig
+
+    kubectl config set-context default \
+    --cluster=kubernetes-the-hard-way \
+    --user=system:kube-controller-manager \
+    --kubeconfig=kube-controller-manager.kubeconfig
+
+    kubectl config use-context default --kubeconfig=kube-controller-manager.kubeconfig
+    ```
+  - Файл готов
+    ```
+    -rw-------   kube-controller-manager.kubeconfig
+    ```
+- **`The kube-scheduler Kubernetes Configuration File`**
+  - Генерим kubeconfig для kube-scheduler
+    ```sh
+    kubectl config set-cluster kubernetes-the-hard-way \
+    --certificate-authority=ca.pem \
+    --embed-certs=true \
+    --server=https://127.0.0.1:6443 \
+    --kubeconfig=kube-scheduler.kubeconfig
+
+    kubectl config set-credentials system:kube-scheduler \
+    --client-certificate=kube-scheduler.pem \
+    --client-key=kube-scheduler-key.pem \
+    --embed-certs=true \
+    --kubeconfig=kube-scheduler.kubeconfig
+
+    kubectl config set-context default \
+    --cluster=kubernetes-the-hard-way \
+    --user=system:kube-scheduler \
+    --kubeconfig=kube-scheduler.kubeconfig
+
+    kubectl config use-context default --kubeconfig=kube-scheduler.kubeconfig
+    ```
+  - Файл готов
+    ```
+    -rw-------   kube-scheduler.kubeconfig
+    ```
+- **`The admin Kubernetes Configuration File`**
+  - Генерим kubeconfig для админа
+    ```sh
+    kubectl config set-cluster kubernetes-the-hard-way \
+    --certificate-authority=ca.pem \
+    --embed-certs=true \
+    --server=https://127.0.0.1:6443 \
+    --kubeconfig=admin.kubeconfig
+
+    kubectl config set-credentials admin \
+    --client-certificate=admin.pem \
+    --client-key=admin-key.pem \
+    --embed-certs=true \
+    --kubeconfig=admin.kubeconfig
+
+    kubectl config set-context default \
+    --cluster=kubernetes-the-hard-way \
+    --user=admin \
+    --kubeconfig=admin.kubeconfig
+
+    kubectl config use-context default --kubeconfig=admin.kubeconfig
+    ```
+  - Файл готов
+    ```
+    -rw-------   admin.kubeconfig
+    ```
+
+### Distribute the Kubernetes Configuration Files
+- Копируем кубеконфиги kubelet и kube-proxy на воркеры
+```sh
+for instance in worker-0 worker-1 worker-2; do
+  gcloud compute scp ${instance}.kubeconfig kube-proxy.kubeconfig ${instance}:~/
+done
+```
+- Копируем кубеконфиги admin, kube-controller-manager и kube-scheduler на контроллеры
+```sh
+for instance in controller-0 controller-1 controller-2; do
+  gcloud compute scp admin.kubeconfig kube-controller-manager.kubeconfig kube-scheduler.kubeconfig ${instance}:~/
+done
+```
+## Generating the Data Encryption Config and Key
+Kubernetes хранит различные данные, включая состояние кластера, конфиги приложенией и секреты. Kubernetes поддерживает возможность [шифрования данных](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) кластера в состоянии покоя.  
+Создадим ключ шифрования и [encryption config](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/#understanding-the-encryption-at-rest-configuration), подходящие для шифрования Kubernetes Secrets 
+
+### The Encryption Key
+```sh
+ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64)
+```
+### The Encryption Config File
+- Создали файл `encryption-config.yaml`
+```sh
+cat > encryption-config.yaml <<EOF
+kind: EncryptionConfig
+apiVersion: v1
+resources:
+  - resources:
+      - secrets
+    providers:
+      - aescbc:
+          keys:
+            - name: key1
+              secret: ${ENCRYPTION_KEY}
+      - identity: {}
+EOF
+```
+- И скопировали его на контроллеры
+```sh
+for instance in controller-0 controller-1 controller-2; do
+  gcloud compute scp encryption-config.yaml ${instance}:~/
+done
+```
+## Bootstrapping the etcd Cluster
+Kubernetes components are stateless and store cluster state in [etcd](https://github.com/etcd-io/etcd). We will bootstrap a three node etcd cluster and configure it for high availability and secure remote access.
+
+### Prerequisites
+> Все дальнейшие команды нужно запускать на каждом инстансе: `controller-0`, `controller-1`, and `controller-2`
+- Логинимся на контроллеры
+```sh
+$ gcloud compute ssh controller-0
+$ gcloud compute ssh controller-1
+$ gcloud compute ssh controller-2
+```
+### Bootstrapping an etcd Cluster Member
+- Качаем официальные [etcd release binaries](https://github.com/etcd-io/etcd/releases) с GitHub
+  ```sh
+  wget -q --show-progress --https-only --timestamping \
+  "https://github.com/etcd-io/etcd/releases/download/v3.4.0/etcd-v3.4.0-linux-amd64.tar.gz"
+  ```
+- Разархивируем и устанавливаем `etcd server` и `etcdctl`
+  ```sh
+  tar -xvf etcd-v3.4.0-linux-amd64.tar.gz
+  sudo mv etcd-v3.4.0-linux-amd64/etcd* /usr/local/bin/
+  ```
+- Конфигурим etcd server
+  ```sh
+  sudo mkdir -p /etc/etcd /var/lib/etcd
+  sudo cp ca.pem kubernetes-key.pem kubernetes.pem /etc/etcd/
+  ```
+  - The instance internal IP address will be used to serve client requests and communicate with etcd cluster peers. Retrieve the internal IP address for the current compute instance
+  ```sh
+  INTERNAL_IP=$(curl -s -H "Metadata-Flavor: Google" \
+  http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)
+  ```
+  - Each etcd member must have a unique name within an etcd cluster. Set the etcd name to match the hostname of the current compute instance
+  ```sh
+  ETCD_NAME=$(hostname -s)
+  ```
+  - Создаем systemd unit `etcd.service` и стартуем etcd server
+
+<details>
+<summary> etcd.service</summary>
+<p>
+
+```sh
+cat <<EOF | sudo tee /etc/systemd/system/etcd.service
+[Unit]
+Description=etcd
+Documentation=https://github.com/coreos
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/etcd \\
+  --name ${ETCD_NAME} \\
+  --cert-file=/etc/etcd/kubernetes.pem \\
+  --key-file=/etc/etcd/kubernetes-key.pem \\
+  --peer-cert-file=/etc/etcd/kubernetes.pem \\
+  --peer-key-file=/etc/etcd/kubernetes-key.pem \\
+  --trusted-ca-file=/etc/etcd/ca.pem \\
+  --peer-trusted-ca-file=/etc/etcd/ca.pem \\
+  --peer-client-cert-auth \\
+  --client-cert-auth \\
+  --initial-advertise-peer-urls https://${INTERNAL_IP}:2380 \\
+  --listen-peer-urls https://${INTERNAL_IP}:2380 \\
+  --listen-client-urls https://${INTERNAL_IP}:2379,https://127.0.0.1:2379 \\
+  --advertise-client-urls https://${INTERNAL_IP}:2379 \\
+  --initial-cluster-token etcd-cluster-0 \\
+  --initial-cluster controller-0=https://10.240.0.10:2380,controller-1=https://10.240.0.11:2380,controller-2=https://10.240.0.12:2380 \\
+  --initial-cluster-state new \\
+  --data-dir=/var/lib/etcd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+</p>
+</details>  
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable etcd
+sudo systemctl start etcd
+```
+
+### Verification
+- List the etcd cluster members
+```sh
+sudo ETCDCTL_API=3 etcdctl member list \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/etcd/ca.pem \
+  --cert=/etc/etcd/kubernetes.pem \
+  --key=/etc/etcd/kubernetes-key.pem
+```
+> output
+```sh
+3a57933972cb5131, started, controller-2, https://10.240.0.12:2380, https://10.240.0.12:2379, false
+f98dc20bce6225a0, started, controller-0, https://10.240.0.10:2380, https://10.240.0.10:2379, false
+ffed16798470cab5, started, controller-1, https://10.240.0.11:2380, https://10.240.0.11:2379, false
+```
+## Bootstrapping the Kubernetes Control Plane
+In this lab you will bootstrap the Kubernetes control plane across three compute instances and configure it for high availability. You will also create an external load balancer that exposes the Kubernetes API Servers to remote clients. The following components will be installed on each node: Kubernetes API Server, Scheduler, and Controller Manager.
+
+### Prerequisites
+> Все дальнейшие команды нужно запускать на каждом инстансе: `controller-0`, `controller-1`, and `controller-2`
+- Логинимся на контроллеры
+```sh
+$ gcloud compute ssh controller-0
+$ gcloud compute ssh controller-1
+$ gcloud compute ssh controller-2
+```
+
+### Provision the Kubernetes Control Plane
+- Create the Kubernetes configuration directory  
+  `sudo mkdir -p /etc/kubernetes/config`
+- Download the official Kubernetes release binaries
+```sh
+wget -q --show-progress --https-only --timestamping \
+  "https://storage.googleapis.com/kubernetes-release/release/v1.15.3/bin/linux/amd64/kube-apiserver" \
+  "https://storage.googleapis.com/kubernetes-release/release/v1.15.3/bin/linux/amd64/kube-controller-manager" \
+  "https://storage.googleapis.com/kubernetes-release/release/v1.15.3/bin/linux/amd64/kube-scheduler" \
+  "https://storage.googleapis.com/kubernetes-release/release/v1.15.3/bin/linux/amd64/kubectl"
+```
+- Install the Kubernetes binaries
+```sh
+chmod +x kube-apiserver kube-controller-manager kube-scheduler kubectl
+sudo mv kube-apiserver kube-controller-manager kube-scheduler kubectl /usr/local/bin/
+```
+
+**`Configure the Kubernetes API Server`**
+```sh
+sudo mkdir -p /var/lib/kubernetes/
+sudo mv ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem \
+service-account-key.pem service-account.pem \
+encryption-config.yaml /var/lib/kubernetes/
+```
+- The instance internal IP address will be used to advertise the API Server to members of the cluster. Retrieve the internal IP address for the current compute instance
+```sh
+INTERNAL_IP=$(curl -s -H "Metadata-Flavor: Google" \
+http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)
+```
+- Create the kube-apiserver.service systemd unit file
+
+<details>
+<summary> kube-apiserver.service </summary>
+<p>
+
+```sh
+cat <<EOF | sudo tee /etc/systemd/system/kube-apiserver.service
+[Unit]
+Description=Kubernetes API Server
+Documentation=https://github.com/kubernetes/kubernetes
+
+[Service]
+ExecStart=/usr/local/bin/kube-apiserver \\
+  --advertise-address=${INTERNAL_IP} \\
+  --allow-privileged=true \\
+  --apiserver-count=3 \\
+  --audit-log-maxage=30 \\
+  --audit-log-maxbackup=3 \\
+  --audit-log-maxsize=100 \\
+  --audit-log-path=/var/log/audit.log \\
+  --authorization-mode=Node,RBAC \\
+  --bind-address=0.0.0.0 \\
+  --client-ca-file=/var/lib/kubernetes/ca.pem \\
+  --enable-admission-plugins=NamespaceLifecycle,NodeRestriction,LimitRanger,ServiceAccount,DefaultStorageClass,ResourceQuota \\
+  --etcd-cafile=/var/lib/kubernetes/ca.pem \\
+  --etcd-certfile=/var/lib/kubernetes/kubernetes.pem \\
+  --etcd-keyfile=/var/lib/kubernetes/kubernetes-key.pem \\
+  --etcd-servers=https://10.240.0.10:2379,https://10.240.0.11:2379,https://10.240.0.12:2379 \\
+  --event-ttl=1h \\
+  --encryption-provider-config=/var/lib/kubernetes/encryption-config.yaml \\
+  --kubelet-certificate-authority=/var/lib/kubernetes/ca.pem \\
+  --kubelet-client-certificate=/var/lib/kubernetes/kubernetes.pem \\
+  --kubelet-client-key=/var/lib/kubernetes/kubernetes-key.pem \\
+  --kubelet-https=true \\
+  --runtime-config=api/all \\
+  --service-account-key-file=/var/lib/kubernetes/service-account.pem \\
+  --service-cluster-ip-range=10.32.0.0/24 \\
+  --service-node-port-range=30000-32767 \\
+  --tls-cert-file=/var/lib/kubernetes/kubernetes.pem \\
+  --tls-private-key-file=/var/lib/kubernetes/kubernetes-key.pem \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+</p>
+</details>  
+
+**`Configure the Kubernetes Controller Manager`**  
+- Move the kube-controller-manager kubeconfig into place and create the `kube-controller-manager.service` systemd unit file
+```sh
+sudo mv kube-controller-manager.kubeconfig /var/lib/kubernetes/
+```
+<details>
+<summary> kube-controller-manager.service </summary>
+<p>
+
+```sh
+cat <<EOF | sudo tee /etc/systemd/system/kube-controller-manager.service
+[Unit]
+Description=Kubernetes Controller Manager
+Documentation=https://github.com/kubernetes/kubernetes
+
+[Service]
+ExecStart=/usr/local/bin/kube-controller-manager \\
+  --address=0.0.0.0 \\
+  --cluster-cidr=10.200.0.0/16 \\
+  --cluster-name=kubernetes \\
+  --cluster-signing-cert-file=/var/lib/kubernetes/ca.pem \\
+  --cluster-signing-key-file=/var/lib/kubernetes/ca-key.pem \\
+  --kubeconfig=/var/lib/kubernetes/kube-controller-manager.kubeconfig \\
+  --leader-elect=true \\
+  --root-ca-file=/var/lib/kubernetes/ca.pem \\
+  --service-account-private-key-file=/var/lib/kubernetes/service-account-key.pem \\
+  --service-cluster-ip-range=10.32.0.0/24 \\
+  --use-service-account-credentials=true \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+</p>
+</details>  
+
+**`Configure the Kubernetes Scheduler`**  
+- Move the kube-scheduler kubeconfig into place and create the `kube-scheduler.yaml` configuration file
+```sh
+sudo mv kube-scheduler.kubeconfig /var/lib/kubernetes/
+```
+```sh
+cat <<EOF | sudo tee /etc/kubernetes/config/kube-scheduler.yaml
+apiVersion: kubescheduler.config.k8s.io/v1alpha1
+kind: KubeSchedulerConfiguration
+clientConnection:
+  kubeconfig: "/var/lib/kubernetes/kube-scheduler.kubeconfig"
+leaderElection:
+  leaderElect: true
+EOF
+```
+- Create the `kube-scheduler.service` systemd unit file
+```sh
+cat <<EOF | sudo tee /etc/systemd/system/kube-scheduler.service
+[Unit]
+Description=Kubernetes Scheduler
+Documentation=https://github.com/kubernetes/kubernetes
+
+[Service]
+ExecStart=/usr/local/bin/kube-scheduler \\
+  --config=/etc/kubernetes/config/kube-scheduler.yaml \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+**`Start the Controller Services`**  
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable kube-apiserver kube-controller-manager kube-scheduler
+sudo systemctl start kube-apiserver kube-controller-manager kube-scheduler
+```
+
+### Enable HTTP Health Checks
+
+A [Google Network Load Balancer](https://cloud.google.com/load-balancing/docs/network/) will be used to distribute traffic across the three API servers and allow each API server to terminate TLS connections and validate client certificates. The network load balancer only supports HTTP health checks which means the HTTPS endpoint exposed by the API server cannot be used. As a workaround the nginx webserver can be used to proxy HTTP health checks. In this section nginx will be installed and configured to accept HTTP health checks on port 80 and proxy the connections to the API server on https://127.0.0.1:6443/healthz  
+
+> The /healthz API server endpoint does not require authentication by default  
+
+Установим базовый веб-сервер для хелсчеков
+```sh
+sudo apt-get update
+sudo apt-get install -y nginx
+```
+```sh
+cat > kubernetes.default.svc.cluster.local <<EOF
+server {
+  listen      80;
+  server_name kubernetes.default.svc.cluster.local;
+
+  location /healthz {
+     proxy_pass                    https://127.0.0.1:6443/healthz;
+     proxy_ssl_trusted_certificate /var/lib/kubernetes/ca.pem;
+  }
+}
+EOF
+```
+```sh
+sudo mv kubernetes.default.svc.cluster.local \
+    /etc/nginx/sites-available/kubernetes.default.svc.cluster.local
+
+sudo ln -s /etc/nginx/sites-available/kubernetes.default.svc.cluster.local /etc/nginx/sites-enabled/
+```
+```sh
+sudo systemctl restart nginx
+sudo systemctl enable nginx
+```
+**`Verification`**
+На каждом контроллере проверяем статус
+```sh
+kubectl get cs --kubeconfig admin.kubeconfig
+
+NAME                 STATUS    MESSAGE             ERROR
+scheduler            Healthy   ok
+etcd-1               Healthy   {"health":"true"}
+controller-manager   Healthy   ok
+etcd-0               Healthy   {"health":"true"}
+etcd-2               Healthy   {"health":"true"}
+```
+Проверяем хелсчеки (тоже на контроллерах)
+```sh
+curl -H "Host: kubernetes.default.svc.cluster.local" -i http://127.0.0.1/healthz
+
+HTTP/1.1 200 OK
+Server: nginx/1.14.0 (Ubuntu)
+Date: Sun, 05 Jan 2020 01:44:07 GMT
+Content-Type: text/plain; charset=utf-8
+Content-Length: 2
+Connection: keep-alive
+X-Content-Type-Options: nosniff
+ok
+```
+
+## RBAC for Kubelet Authorization
+
+In this section you will configure RBAC permissions to allow the Kubernetes API Server to access the Kubelet API on each worker node. Access to the Kubelet API is required for retrieving metrics, logs, and executing commands in pods.
+
+> This tutorial sets the Kubelet --authorization-mode flag to Webhook. Webhook mode uses the [Subject Access Review](https://kubernetes.io/docs/reference/access-authn-authz/authorization/#checking-api-access) API to determine authorization
+
+Дальнейшие команды влияют на весь кластер, и их нужно запускать только один раз с одного из узлов контроллера
+```sh
+gcloud compute ssh controller-0
+```
+Создаем `system:kube-apiserver-to-kubelet` [Cluster Role](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#role-and-clusterrole) с разрешениями для доступа к API Kubelet и выполнения наиболее распространенных задач, связанных с управлением подами 
+```sh
+cat <<EOF | kubectl apply --kubeconfig admin.kubeconfig -f -
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  annotations:
+    rbac.authorization.kubernetes.io/autoupdate: "true"
+  labels:
+    kubernetes.io/bootstrapping: rbac-defaults
+  name: system:kube-apiserver-to-kubelet
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/proxy
+      - nodes/stats
+      - nodes/log
+      - nodes/spec
+      - nodes/metrics
+    verbs:
+      - "*"
+EOF
+```
+Kubernetes API Server аутентифицируется в Kubelet как пользователь `kubernetes`, используя сертификат клиента, как определено флагом `--kubelet-client-certificate`  
+Bind the `system:kube-apiserver-to-kubelet` ClusterRole to the `kubernetes` user
+```sh
+cat <<EOF | kubectl apply --kubeconfig admin.kubeconfig -f -
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: system:kube-apiserver
+  namespace: ""
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:kube-apiserver-to-kubelet
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: kubernetes
+EOF
+```
+
+### The Kubernetes Frontend Load Balancer
+In this section you will provision an external load balancer to front the Kubernetes API Servers. The `kubernetes-the-hard-way` static IP address will be attached to the resulting load balancer.
+
+> The compute instances created in this tutorial will not have permission to complete this section. **Run the following commands from the same machine used to create the compute instances**
+
+**`Provision a Network Load Balancer`**
+- Create the external load balancer network resources
+```sh
+KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes-the-hard-way \
+  --region $(gcloud config get-value compute/region) \
+  --format 'value(address)')
+
+gcloud compute http-health-checks create kubernetes \
+  --description "Kubernetes Health Check" \
+  --host "kubernetes.default.svc.cluster.local" \
+  --request-path "/healthz"
+
+gcloud compute firewall-rules create kubernetes-the-hard-way-allow-health-check \
+  --network kubernetes-the-hard-way \
+  --source-ranges 209.85.152.0/22,209.85.204.0/22,35.191.0.0/16 \
+  --allow tcp
+
+gcloud compute target-pools create kubernetes-target-pool \
+  --http-health-check kubernetes
+
+gcloud compute target-pools add-instances kubernetes-target-pool \
+  --instances controller-0,controller-1,controller-2
+
+gcloud compute forwarding-rules create kubernetes-forwarding-rule \
+  --address ${KUBERNETES_PUBLIC_ADDRESS} \
+  --ports 6443 \
+  --region $(gcloud config get-value compute/region) \
+  --target-pool kubernetes-target-pool
+```
+
+**`Verification`**  
+> The compute instances created in this tutorial will not have permission to complete this section. Run the following commands from the same machine used to create the compute instances.
+
+- Получаем статик IP `kubernetes-the-hard-way`
+```sh
+KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes-the-hard-way \
+  --region $(gcloud config get-value compute/region) \
+  --format 'value(address)')
+```
+- Курлом смотрим инфо о версии кубика в кластере
+```sh
+curl --cacert ca.pem https://${KUBERNETES_PUBLIC_ADDRESS}:6443/version
+
+{
+  "major": "1",
+  "minor": "15",
+  "gitVersion": "v1.15.3",
+  "gitCommit": "2d3c76f9091b6bec110a5e63777c332469e0cba2",
+  "gitTreeState": "clean",
+  "buildDate": "2019-08-19T11:05:50Z",
+  "goVersion": "go1.12.9",
+  "compiler": "gc",
+  "platform": "linux/amd64"
+}
+```
+## Bootstrapping the Kubernetes Worker Nodes
+
+Будем бутстрапить воркеры. На каждой ноде будут установлены: 
+- [runc](https://github.com/opencontainers/runc)
+- [container networking plugins](https://github.com/containernetworking/cni)
+- [containerd](https://github.com/containerd/containerd)
+- [kubelet](https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/)
+- [kube-proxy](https://kubernetes.io/docs/concepts/cluster-administration/proxies/)
+
+> Команды будут выполняться на каждом воркере
+- Заходим на каждый воркер
+```sh
+gcloud compute ssh worker-0
+```
+
+### Provisioning a Kubernetes Worker Node
+- Install the OS dependencies
+  ```sh
+  sudo apt-get update
+  sudo apt-get -y install socat conntrack ipset
+  ```
+  > The socat binary enables support for the `kubectl port-forward` command
+- Disable Swap
+  > By default the kubelet will fail to start if swap is enabled. It is recommended that swap be disabled to ensure Kubernetes can provide proper resource allocation and quality of service.
+  - Verify if swap is enabled
+    ```sh
+    sudo swapon --show
+    ```
+    - Если вывод пустой, то свап отклюен
+  - Disable swap
+    ```sh
+    sudo swapoff -a
+    ```
+  > To ensure swap remains off after reboot consult your Linux distro documentation
+
+### Download and Install Worker Binaries
+```sh
+wget -q --show-progress --https-only --timestamping \
+https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.15.0/crictl-v1.15.0-linux-amd64.tar.gz \
+https://github.com/opencontainers/runc/releases/download/v1.0.0-rc8/runc.amd64 \
+https://github.com/containernetworking/plugins/releases/download/v0.8.2/cni-plugins-linux-amd64-v0.8.2.tgz \
+https://github.com/containerd/containerd/releases/download/v1.2.9/containerd-1.2.9.linux-amd64.tar.gz \
+https://storage.googleapis.com/kubernetes-release/release/v1.15.3/bin/linux/amd64/kubectl \
+https://storage.googleapis.com/kubernetes-release/release/v1.15.3/bin/linux/amd64/kube-proxy \
+https://storage.googleapis.com/kubernetes-release/release/v1.15.3/bin/linux/amd64/kubelet
+```
+- Create the installation directories
+```sh
+sudo mkdir -p \
+  /etc/cni/net.d \
+  /opt/cni/bin \
+  /var/lib/kubelet \
+  /var/lib/kube-proxy \
+  /var/lib/kubernetes \
+  /var/run/kubernetes
+```
+- Install the worker binaries
+```sh
+mkdir containerd
+tar -xvf crictl-v1.15.0-linux-amd64.tar.gz
+tar -xvf containerd-1.2.9.linux-amd64.tar.gz -C containerd
+sudo tar -xvf cni-plugins-linux-amd64-v0.8.2.tgz -C /opt/cni/bin/
+sudo mv runc.amd64 runc
+chmod +x crictl kubectl kube-proxy kubelet runc 
+sudo mv crictl kubectl kube-proxy kubelet runc /usr/local/bin/
+sudo mv containerd/bin/* /bin/
+```
+
+### Configure CNI Networking
+- Retrieve the Pod CIDR range for the current compute instance
+```sh
+POD_CIDR=$(curl -s -H "Metadata-Flavor: Google" \
+  http://metadata.google.internal/computeMetadata/v1/instance/attributes/pod-cidr)
+```
+- Create the bridge network configuration file
+```sh
+cat <<EOF | sudo tee /etc/cni/net.d/10-bridge.conf
+{
+    "cniVersion": "0.3.1",
+    "name": "bridge",
+    "type": "bridge",
+    "bridge": "cnio0",
+    "isGateway": true,
+    "ipMasq": true,
+    "ipam": {
+        "type": "host-local",
+        "ranges": [
+          [{"subnet": "${POD_CIDR}"}]
+        ],
+        "routes": [{"dst": "0.0.0.0/0"}]
+    }
+}
+EOF
+```
+- Create the loopback network configuration file
+```sh
+cat <<EOF | sudo tee /etc/cni/net.d/99-loopback.conf
+{
+    "cniVersion": "0.3.1",
+    "name": "lo",
+    "type": "loopback"
+}
+EOF
+```
+
+### Configure containerd
+- Create the containerd configuration file
+```sh
+sudo mkdir -p /etc/containerd/
+```
+```sh
+cat << EOF | sudo tee /etc/containerd/config.toml
+[plugins]
+  [plugins.cri.containerd]
+    snapshotter = "overlayfs"
+    [plugins.cri.containerd.default_runtime]
+      runtime_type = "io.containerd.runtime.v1.linux"
+      runtime_engine = "/usr/local/bin/runc"
+      runtime_root = ""
+EOF
+```
+- Create the containerd.service systemd unit file
+<details>
+<summary> containerd.service </summary>
+<p>
+
+```sh
+cat <<EOF | sudo tee /etc/systemd/system/containerd.service
+[Unit]
+Description=containerd container runtime
+Documentation=https://containerd.io
+After=network.target
+
+[Service]
+ExecStartPre=/sbin/modprobe overlay
+ExecStart=/bin/containerd
+Restart=always
+RestartSec=5
+Delegate=yes
+KillMode=process
+OOMScoreAdjust=-999
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+</p>
+</details>
+
+### Configure the Kubelet
+```sh
+  sudo mv ${HOSTNAME}-key.pem ${HOSTNAME}.pem /var/lib/kubelet/
+  sudo mv ${HOSTNAME}.kubeconfig /var/lib/kubelet/kubeconfig
+  sudo mv ca.pem /var/lib/kubernetes/
+```
+- Create the kubelet-config.yaml configuration file
+<details>
+<summary> kubelet-config.yaml </summary>
+<p>
+
+```sh
+cat <<EOF | sudo tee /var/lib/kubelet/kubelet-config.yaml
+kind: KubeletConfiguration
+apiVersion: kubelet.config.k8s.io/v1beta1
+authentication:
+  anonymous:
+    enabled: false
+  webhook:
+    enabled: true
+  x509:
+    clientCAFile: "/var/lib/kubernetes/ca.pem"
+authorization:
+  mode: Webhook
+clusterDomain: "cluster.local"
+clusterDNS:
+  - "10.32.0.10"
+podCIDR: "${POD_CIDR}"
+resolvConf: "/run/systemd/resolve/resolv.conf"
+runtimeRequestTimeout: "15m"
+tlsCertFile: "/var/lib/kubelet/${HOSTNAME}.pem"
+tlsPrivateKeyFile: "/var/lib/kubelet/${HOSTNAME}-key.pem"
+EOF
+```
+
+</p>
+</details>
+
+  > The resolvConf configuration is used to avoid loops when using CoreDNS for service discovery on systems running `systemd-resolved`
+
+- Create the kubelet.service systemd unit file:
+<details>
+<summary> kubelet.service </summary>
+<p>
+
+```sh
+cat <<EOF | sudo tee /etc/systemd/system/kubelet.service
+[Unit]
+Description=Kubernetes Kubelet
+Documentation=https://github.com/kubernetes/kubernetes
+After=containerd.service
+Requires=containerd.service
+
+[Service]
+ExecStart=/usr/local/bin/kubelet \\
+  --config=/var/lib/kubelet/kubelet-config.yaml \\
+  --container-runtime=remote \\
+  --container-runtime-endpoint=unix:///var/run/containerd/containerd.sock \\
+  --image-pull-progress-deadline=2m \\
+  --kubeconfig=/var/lib/kubelet/kubeconfig \\
+  --network-plugin=cni \\
+  --register-node=true \\
+  --v=2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+</p>
+</details>
+
+### Configure the Kubernetes Proxy
+```sh
+sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy/kubeconfig
+```
+- Create the kube-proxy-config.yaml configuration file
+```sh
+cat <<EOF | sudo tee /var/lib/kube-proxy/kube-proxy-config.yaml
+kind: KubeProxyConfiguration
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+clientConnection:
+  kubeconfig: "/var/lib/kube-proxy/kubeconfig"
+mode: "iptables"
+clusterCIDR: "10.200.0.0/16"
+EOF
+```
+- Create the kube-proxy.service systemd unit file
+<details>
+<summary> kube-proxy.service </summary>
+<p>
+
+```sh
+cat <<EOF | sudo tee /etc/systemd/system/kube-proxy.service
+[Unit]
+Description=Kubernetes Kube Proxy
+Documentation=https://github.com/kubernetes/kubernetes
+
+[Service]
+ExecStart=/usr/local/bin/kube-proxy \\
+  --config=/var/lib/kube-proxy/kube-proxy-config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+</p>
+</details>
+
+### Start the Worker Services
+```sh
+  sudo systemctl daemon-reload
+  sudo systemctl enable containerd kubelet kube-proxy
+  sudo systemctl start containerd kubelet kube-proxy
+```
+
+### Verification
+> The compute instances created in this tutorial will not have permission to complete this section. Run the following commands from the same machine used to create the compute instances.
+
+List the registered Kubernetes nodes
+```sh
+gcloud compute ssh controller-0 \
+--command "kubectl get nodes --kubeconfig admin.kubeconfig"
+
+NAME       STATUS   ROLES    AGE   VERSION
+worker-0   Ready    <none>   80s   v1.15.3
+worker-1   Ready    <none>   77s   v1.15.3
+worker-2   Ready    <none>   75s   v1.15.3
+```
+## Configuring kubectl for Remote Access
+In this lab you will generate a kubeconfig file for the `kubectl` command line utility based on the `admin` user credentials.
+
+> Run the commands in this lab from the same directory used to generate the admin client certificates.
+
+### The Admin Kubernetes Configuration File
+Each kubeconfig requires a Kubernetes API Server to connect to. To support high availability the IP address assigned to the external load balancer fronting the Kubernetes API Servers will be used.
+
+Generate a kubeconfig file suitable for authenticating as the `admin` user
+```sh
+  KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes-the-hard-way \
+    --region $(gcloud config get-value compute/region) \
+    --format 'value(address)')
+
+  kubectl config set-cluster kubernetes-the-hard-way \
+    --certificate-authority=ca.pem \
+    --embed-certs=true \
+    --server=https://${KUBERNETES_PUBLIC_ADDRESS}:6443
+
+  kubectl config set-credentials admin \
+    --client-certificate=admin.pem \
+    --client-key=admin-key.pem
+
+  kubectl config set-context kubernetes-the-hard-way \
+    --cluster=kubernetes-the-hard-way \
+    --user=admin
+
+  kubectl config use-context kubernetes-the-hard-way
+```
+
+### Verification
+- Check the health of the remote Kubernetes cluster
+```sh
+$ kubectl get componentstatuses
+
+NAME                 STATUS    MESSAGE             ERROR
+controller-manager   Healthy   ok
+scheduler            Healthy   ok
+etcd-0               Healthy   {"health":"true"}
+etcd-1               Healthy   {"health":"true"}
+etcd-2               Healthy   {"health":"true"}
+```
+- List the nodes in the remote Kubernetes cluster
+```sh
+$ kubectl get nodes
+
+NAME       STATUS   ROLES    AGE     VERSION
+worker-0   Ready    <none>   7m30s   v1.15.3
+worker-1   Ready    <none>   7m27s   v1.15.3
+worker-2   Ready    <none>   7m25s   v1.15.3
+```
+## Provisioning Pod Network Routes
+
+Pods scheduled to a node receive an IP address from the node's Pod CIDR range. At this point pods can not communicate with other pods running on different nodes due to missing network routes.
+
+In this lab you will create a route for each worker node that maps the node's Pod CIDR range to the node's internal IP address.
+
+> There are other ways to implement the Kubernetes networking model.
+
+### The Routing Table
+In this section you will gather the information required to create routes in the `kubernetes-the-hard-way` VPC network.
+- Смотреть внутренний IP-адрес и диапазон Pod CIDR для каждого воркера
+```sh
+$ for instance in worker-0 worker-1 worker-2; do
+  gcloud compute instances describe ${instance} \
+  --format 'value[separator=" "](networkInterfaces[0].networkIP,metadata.items[0].value)'
+  done
+
+10.240.0.20 10.200.0.0/24
+10.240.0.21 10.200.1.0/24
+10.240.0.22 10.200.2.0/24
+```
+
+### Routes
+- Create network routes for each worker instance
+```sh
+$ for i in 0 1 2; do
+  gcloud compute routes create kubernetes-route-10-200-${i}-0-24 \
+    --network kubernetes-the-hard-way \
+    --next-hop-address 10.240.0.2${i} \
+    --destination-range 10.200.${i}.0/24
+  done
+```
+- List the routes in the kubernetes-the-hard-way VPC network
+```sh
+$ gcloud compute routes list --filter "network: kubernetes-the-hard-way"
+
+NAME                            NETWORK                  DEST_RANGE     NEXT_HOP                  PRIORITY
+default-route-68e820c79db00527  kubernetes-the-hard-way  10.240.0.0/24  kubernetes-the-hard-way   1000
+default-route-e0148b1790f684a4  kubernetes-the-hard-way  0.0.0.0/0      default-internet-gateway  1000
+kubernetes-route-10-200-0-0-24  kubernetes-the-hard-way  10.200.0.0/24  10.240.0.20               1000
+kubernetes-route-10-200-1-0-24  kubernetes-the-hard-way  10.200.1.0/24  10.240.0.21               1000
+kubernetes-route-10-200-2-0-24  kubernetes-the-hard-way  10.200.2.0/24  10.240.0.22               1000
+```
+## Deploying the DNS Cluster Add-on
+
+In this lab you will deploy the [DNS add-on](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) which provides DNS based service discovery, backed by [CoreDNS](https://coredns.io/), to applications running inside the Kubernetes cluster.
+
+### The DNS Cluster Add-on
+- Deploy the `coredns` cluster add-on
+```sh
+$ kubectl apply -f https://storage.googleapis.com/kubernetes-the-hard-way/coredns.yaml
+
+serviceaccount/coredns created
+clusterrole.rbac.authorization.k8s.io/system:coredns created
+clusterrolebinding.rbac.authorization.k8s.io/system:coredns created
+configmap/coredns created
+deployment.apps/coredns created
+service/kube-dns created
+```
+- List the pods created by the `kube-dns` deployment
+```sh
+$ kubectl get pods -l k8s-app=kube-dns -n kube-system
+
+NAME                     READY   STATUS    RESTARTS   AGE
+coredns-5fb99965-8h4qp   1/1     Running   0          76s
+coredns-5fb99965-h9cfc   1/1     Running   0          76s
+```
+### Verification
+- Create a `busybox` deployment
+```sh
+$ kubectl run --generator=run-pod/v1 busybox --image=busybox:1.28 --command -- sleep 3600
+```
+- List the pod created by the `busybox` deployment
+```sh
+$ kubectl get pods -l run=busybox
+
+NAME      READY   STATUS    RESTARTS   AGE
+busybox   1/1     Running   0          45s
+```
+- Retrieve the full name of the busybox pod
+```sh
+POD_NAME=$(kubectl get pods -l run=busybox -o jsonpath="{.items[0].metadata.name}")
+```
+- Execute a DNS lookup for the kubernetes service inside the busybox pod
+```sh
+$ kubectl exec -ti $POD_NAME -- nslookup kubernetes
+
+Server:    10.32.0.10
+Address 1: 10.32.0.10 kube-dns.kube-system.svc.cluster.local
+Name:      kubernetes
+Address 1: 10.32.0.1 kubernetes.default.svc.cluster.local
+```
+## Smoke Test
+
+In this lab you will complete a series of tasks to ensure your Kubernetes cluster is functioning correctly.
+
+### Data Encryption
+In this section you will verify the ability to [encrypt secret data at rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/#verifying-that-data-is-encrypted)
+
+- Create a generic secret
+```sh
+kubectl create secret generic kubernetes-the-hard-way \
+  --from-literal="mykey=mydata"
+```
+- Print a hexdump of the `kubernetes-the-hard-way` secret stored in etcd
+```sh
+gcloud compute ssh controller-0 \
+  --command "sudo ETCDCTL_API=3 etcdctl get \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/etcd/ca.pem \
+  --cert=/etc/etcd/kubernetes.pem \
+  --key=/etc/etcd/kubernetes-key.pem\
+  /registry/secrets/default/kubernetes-the-hard-way | hexdump -C"
+```
+> The etcd key should be prefixed with `k8s:enc:aescbc:v1:key1`, which indicates the `aescbc` provider was used to encrypt the data with the `key1` encryption key.
+
+### Deployments
+In this section you will verify the ability to create and manage [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
+
+- Create a deployment for the [nginx](https://nginx.org/en/) web server
+```sh
+$ kubectl create deployment nginx --image=nginx
+```
+- List the pod created by the nginx deployment
+```sh
+$ kubectl get pods -l app=nginx
+
+NAME                     READY   STATUS    RESTARTS   AGE
+nginx-554b9c67f9-djhrq   1/1     Running   0          39s
+```
+
+### Port Forwarding
+In this section you will verify the ability to access applications remotely using [port forwarding](https://kubernetes.io/docs/tasks/access-application-cluster/port-forward-access-application-cluster/)
+
+- Retrieve the full name of the nginx pod
+```sh
+POD_NAME=$(kubectl get pods -l app=nginx -o jsonpath="{.items[0].metadata.name}")
+```
+- Forward port 8080 on your local machine to port 80 of the nginx pod
+```sh
+$ kubectl port-forward $POD_NAME 8080:80
+
+Forwarding from 127.0.0.1:8080 -> 80
+Forwarding from [::1]:8080 -> 80
+```
+- In a new terminal make an HTTP request using the forwarding address
+```sh
+$ curl --head http://127.0.0.1:8080
+
+HTTP/1.1 200 OK
+Server: nginx/1.17.6
+Date: Mon, 06 Jan 2020 01:29:00 GMT
+Content-Type: text/html
+Content-Length: 612
+Last-Modified: Tue, 19 Nov 2019 12:50:08 GMT
+Connection: keep-alive
+ETag: "5dd3e500-264"
+Accept-Ranges: bytes
+```
+
+### Logs
+In this section you will verify the ability to retrieve container logs.
+
+- Print the nginx pod logs
+```sh
+$ kubectl logs $POD_NAME
+
+127.0.0.1 - - [06/Jan/2020:01:29:00 +0000] "HEAD / HTTP/1.1" 200 0 "-" "curl/7.64.1" "-"
+```
+### Exec
+In this section you will verify the ability to [execute commands in a container](https://kubernetes.io/docs/tasks/debug-application-cluster/get-shell-running-container/#running-individual-commands-in-a-container)
+
+- Print the nginx version by executing the nginx -v command in the nginx container
+```sh
+$ kubectl exec -ti $POD_NAME -- nginx -v
+
+nginx version: nginx/1.17.6
+```
+
+## Services
+In this section you will verify the ability to expose applications using a [Service](https://kubernetes.io/docs/concepts/services-networking/service/)
+
+- Expose the nginx deployment using a [NodePort](https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport) service
+```sh
+$ kubectl expose deployment nginx --port 80 --type NodePort
+
+service/nginx exposed
+```
+> The LoadBalancer service type can not be used because your cluster is not configured with [cloud provider integration](https://kubernetes.io/docs/setup/#cloud-provider). Setting up cloud provider integration is out of scope for this tutorial.
+
+- Retrieve the node port assigned to the nginx service
+```sh
+NODE_PORT=$(kubectl get svc nginx \
+  --output=jsonpath='{range .spec.ports[0]}{.nodePort}')
+```
+- Create a firewall rule that allows remote access to the nginx node port
+```sh
+gcloud compute firewall-rules create kubernetes-the-hard-way-allow-nginx-service \
+  --allow=tcp:${NODE_PORT} \
+  --network kubernetes-the-hard-way
+```
+- Retrieve the external IP address of a worker instance
+```sh
+EXTERNAL_IP=$(gcloud compute instances describe worker-0 \
+  --format 'value(networkInterfaces[0].accessConfigs[0].natIP)')
+```
+- Make an HTTP request using the external IP address and the nginx node port
+```sh
+$ curl -I http://${EXTERNAL_IP}:${NODE_PORT}
+
+HTTP/1.1 200 OK
+Server: nginx/1.17.6
+Date: Mon, 06 Jan 2020 01:37:04 GMT
+Content-Type: text/html
+Content-Length: 612
+Last-Modified: Tue, 19 Nov 2019 12:50:08 GMT
+Connection: keep-alive
+ETag: "5dd3e500-264"
+Accept-Ranges: bytes
+```
+## Cleaning Up
+
+In this lab you will delete the compute resources created during this tutorial.
+
+## Compute Instances
+- Delete the controller and worker compute instances
+```sh
+gcloud -q compute instances delete \
+  controller-0 controller-1 controller-2 \
+  worker-0 worker-1 worker-2 \
+  --zone $(gcloud config get-value compute/zone)
+```
+## Networking
+- Delete the external load balancer network resources
+```sh
+gcloud -q compute forwarding-rules delete kubernetes-forwarding-rule \
+  --region $(gcloud config get-value compute/region)
+
+gcloud -q compute target-pools delete kubernetes-target-pool
+
+gcloud -q compute http-health-checks delete kubernetes
+
+gcloud -q compute addresses delete kubernetes-the-hard-way
+```
+- Delete the kubernetes-the-hard-way firewall rules
+```sh
+gcloud -q compute firewall-rules delete \
+  kubernetes-the-hard-way-allow-nginx-service \
+  kubernetes-the-hard-way-allow-internal \
+  kubernetes-the-hard-way-allow-external \
+  kubernetes-the-hard-way-allow-health-check
+```
+- Delete the kubernetes-the-hard-way network VPC
+```sh
+gcloud -q compute routes delete \
+  kubernetes-route-10-200-0-0-24 \
+  kubernetes-route-10-200-1-0-24 \
+  kubernetes-route-10-200-2-0-24
+
+gcloud -q compute networks subnets delete kubernetes
+
+gcloud -q compute networks delete kubernetes-the-hard-way
 ```
 
 [Содержание](#top)
