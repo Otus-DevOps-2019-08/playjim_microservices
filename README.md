@@ -871,7 +871,7 @@ networks:
 
 [Содержание](#top)
 
-<a name="hw18"></a>
+<a name="hw19"></a>
 # Домашнее задание 19
 ## Kubernetes - The Hard Way
 
@@ -2616,6 +2616,145 @@ gcloud -q compute routes delete \
 gcloud -q compute networks subnets delete kubernetes
 
 gcloud -q compute networks delete kubernetes-the-hard-way
+```
+
+[Содержание](#top)
+
+<a name="hw20"></a>
+# Домашнее задание 20
+## Kubernetes. Запуск кластера и приложения. Модель безопасности.
+### План
+ - Развернуть локальное окружение для работы с Kubernetes
+ - Развернуть Kubernetes в GKE
+ - Запустить reddit в Kubernetes
+
+### Разварачиваю локальное окружение Kubernetes
+1) **kubectl** - фактически, главная утилиты для работы
+c Kubernetes API (все, что делает kubectl, можно
+сделать с помощью HTTP-запросов к API k8s)
+2) Директории **~/.kube** - содержит служебную инфу
+для kubectl (конфиги, кеши, схемы API)
+3) **minikube** - утилиты для разворачивания локальной
+инсталляции Kubernetes. 
+
+## Kubectl
+Устанавливаю [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
+
+## Minikube
+Для работы Minukube требуется локальный гипервизор. Я буду использовать VirtualBox
+
+Инструкция по установке Minikube для разных ОС:
+https://kubernetes.io/docs/tasks/tools/install-minikube/
+
+После установки запускаю Minikube:
+```
+$ minikube start
+😄  minikube v1.7.2 on Ubuntu 18.04
+✨  Automatically selected the virtualbox driver
+💿  Downloading VM boot image ...
+    > minikube-v1.7.0.iso.sha256: 65 B / 65 B [--------------] 100.00% ? p/s 0s
+    > minikube-v1.7.0.iso: 166.68 MiB / 166.68 MiB [-] 100.00% 8.69 MiB p/s 20s
+🔥  Creating virtualbox VM (CPUs=2, Memory=2000MB, Disk=20000MB) ...
+🐳  Preparing Kubernetes v1.17.2 on Docker 19.03.5 ...
+💾  Downloading kubectl v1.17.2
+💾  Downloading kubelet v1.17.2
+💾  Downloading kubeadm v1.17.2
+🚀  Launching Kubernetes ... 
+🌟  Enabling addons: default-storageclass, storage-provisioner
+⌛  Waiting for cluster to come online ...
+🏄  Done! kubectl is now configured to use "minikube"
+```
+P.S. Если нужна конкретная версия kubernetes, указывайте флаг
+```--kubernetes-version <version> (v1.8.0)```
+
+P.P.S.По-умолчанию используется VirtualBox. Если у вас другой гипервизор, то ставьте флаг
+```--vm-driver=<hypervisor> ```
+
+Наш Minikube-кластер развернут. При этом автоматически был настроен конфиг kubectl.
+Проверим, что это так:
+```
+$ kubectl get nodes
+NAME       STATUS   ROLES    AGE   VERSION
+minikube   Ready    master   18m   v1.17.2
+```
+Конфигурация kubectl - это **контекст**.
+
+Контекст - это комбинация:
+1) cluster - API-сервер
+2) user - пользователь для подключения к кластеру
+3) namespace - область видимости (не обязательно, поумолчанию default) 
+Информацию о контекстах kubectl сохраняет в файле ```~/.kube/config```:
+```
+$ cat ~/.kube/config 
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority: /home/playjim/.minikube/ca.crt
+    server: https://192.168.99.100:8443
+  name: minikube
+contexts:
+- context:
+    cluster: minikube
+    user: minikube
+  name: minikube
+current-context: minikube
+kind: Config
+preferences: {}
+users:
+- name: minikube
+  user:
+    client-certificate: /home/playjim/.minikube/client.crt
+    client-key: /home/playjim/.minikube/client.key
+```
+Кластер (cluster) - это:
+1) server - адрес kubernetes API-сервера
+2) certificate-authority - корневой сертификат (которым
+подписан SSL-сертификат самого сервера), чтобы
+убедиться, что нас не обманывают и перед нами тот
+самый сервер
++ name (Имя) для идентификации в конфиге
+
+Пользователь (user) - это:
+1) Данные для аутентификации (зависит от того, как настроен
+сервер). Это могут быть:
+• username + password (Basic Auth
+• client key + client certificate
+• token
+• auth-provider config (например GCP)
++ name (Имя) для идентификации в конфиге
+
+Контекст (контекст) - это:
+1) cluster - имя кластера из списка clusters
+2) user - имя пользователя из списка users
+3) namespace - область видимости по-умолчанию (не
+обязательно)
++ name (Имя) для идентификации в конфиге
+
+
+Обычно порядок конфигурирования kubectl следующий:
+1) Создать cluster:
+$ kubectl config set-cluster … cluster_name
+2) Создать данные пользователя (credentials)
+$ kubectl config set-credentials … user_name
+3) Создать контекст
+$ kubectl config set-context context_name \
+--cluster=cluster_name \
+--user=user_name
+4) Использовать контекст
+$ kubectl config use-context context_name
+
+Таким образом kubectl конфигурируется для подключения к
+разным кластерам, под разными пользователями.
+Текущий контекст можно увидеть так: 
+```
+$ kubectl config current-context
+minikube
+```
+Список всех контекстов можно увидеть так: 
+```
+$ kubectl config get-contexts
+CURRENT   NAME       CLUSTER    AUTHINFO   NAMESPACE
+*         minikube   minikube   minikube   
 ```
 
 [Содержание](#top)
