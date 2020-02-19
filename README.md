@@ -2757,4 +2757,44 @@ CURRENT   NAME       CLUSTER    AUTHINFO   NAMESPACE
 *         minikube   minikube   minikube   
 ```
 
+## Запуск приложения reddit
+Каталог с yaml манифестами приложения находится в **./kubernetes/reddit**
+
+Основные объекты - это ресурсы Deployment.
+Как помним из предыдущего занятия, основные его задачи:
++ Создание ReplicationSet (следит, чтобы число запущенных
+Pod-ов соответствовало описанному)
++ Ведение истории версий запущенных Pod-ов (для
+различных стратегий деплоя, для возможностей отката)
++ Описание процесса деплоя (стратегия, параметры
+стратегий)
+
+Для запуска приложения сначало создаю namespace **dev**, а потом применяю конфигурацию:
+```
+$ kubectl apply -f ./kubernetes/reddit/dev-namespace.yml
+namespace/dev created
+$ kubectl apply -f ./kubernetes/reddit/ -n dev
+deployment.apps/comment created
+service/comment-db created
+service/comment created
+namespace/dev unchanged
+deployment.apps/mongo created
+service/mongodb created
+deployment.apps/post created
+service/post-db created
+service/post created
+deployment.apps/ui created
+service/ui created
+```
+Minikube может выдавать web-странцы с сервисами
+которые были помечены типом **NodePort**
+Попробуйте:
+```
+$ minikube service list
+```
+Получить список расширений:
+```
+$ minikube addons list
+```
+
 [Содержание](#top)
