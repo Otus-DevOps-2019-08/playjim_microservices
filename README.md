@@ -14,6 +14,7 @@
 - [HW.19 - Kubernetes - The Hard Way](#hw19)
 - [HW.20 - Kubernetes. Запуск кластера и приложения. Модель безопасности.](#hw20)
 - [HW.21 - Kubernetes. Networks ,Storages.](#hw21)
+- [HW.22 - Kubernetes. CI/CD в Kubernetes](#hw22)
 ---
 
 <a name="hw12"></a>
@@ -2812,8 +2813,6 @@ $ minikube addons list
 - PersistentVolumes
 - PersistentVolumeClaims
 
-- [HW.21 - Kubernetes. Networks ,Storages.](#hw21)
-
 ### Service - определяет конечные узлы доступа (Endpoint’ы):
 - селекторные сервисы (k8s сам находит POD-ы по label’ам)
 - безселекторные сервисы (мы вручную описываем
@@ -2875,5 +2874,21 @@ Kubernetes - **Ingress**.
 подключить удаленное хранилище. В нашем случае можем
 использовать Volume gcePersistentDisk, который будет складывать
 данные в хранилище GCE.
+
+
+<a name="hw22"></a>
+# Домашнее задание 22
+## Kubernetes. CI/CD в Kubernetes
+### План
+ - Работа с Helm
+ - Развертывание Gitlab в Kubernetes
+ - Запуск CI/CD конвейера в Kubernetes
+
+**Helm** - пакетный менеджер для Kubernetes.
+С его помощью мы будем:
+1. Стандартизировать поставку приложения в Kubernetes
+2. Декларировать инфраструктуру
+3. Деплоить новые версии приложения
+
 
 [Содержание](#top)
