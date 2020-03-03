@@ -4,7 +4,7 @@
 **Содрежание:**
 <a name="top"></a>
 - [HW.12 - Технология контейнеризации. Введение в Docker](#hw12)
-    - [Доп. задание](#jiji1)  
+    - [Доп. задание](#jiji1)
 - [HW.13 - Docker-образы. Микросервисы](#hw13)
 - [HW.14 - Docker: сети, docker-compose](#hw14)
 - [HW.15 - Устройство Gitlab CI. Построение процесса непрерывной поставки](#hw15)
@@ -13,6 +13,10 @@
 - [HW.18 - Логирование и распределенная трассировка](#hw18)
 - [HW.19 - Kubernetes - The Hard Way](#hw19)
 - [HW.20 - Kubernetes. Запуск кластера и приложения. Модель безопасности.](#hw20)
+- [HW.21 - Kubernetes. Networks ,Storages.](#hw21)
+- [HW.22 - Kubernetes. CI/CD в Kubernetes](#hw22)
+- [HW.23 - Kubernetes. Мониторинг и логирование](#hw23)
+
 ---
 
 <a name="hw12"></a>
@@ -73,18 +77,18 @@ $ docker start c6fcb5db6c5b
 ```sh
 $ docker attach c6fcb5db6c5b
 ```
-- 
+-
 ```sh
 docker run = docker create + docker start + docker attach
 ```
 - **docker create** юзается, если не надо стартовать конт сразу после создания
 
 ### Docker run
-- Через параметры передаются лимиты(cpu/mem/disk), ip, volumes  
-*-i* – запускает контейнер в foreground режиме (docker attach)  
-*-d* – запускает контейнер в background режиме  
-*-t* - создает TTY  
-*docker run -it ubuntu:16.04 bash*  
+- Через параметры передаются лимиты(cpu/mem/disk), ip, volumes
+*-i* – запускает контейнер в foreground режиме (docker attach)
+*-d* – запускает контейнер в background режиме
+*-t* - создает TTY
+*docker run -it ubuntu:16.04 bash*
 *docker run -dt nginx:latest*
 ### Docker exec
 - Запускает новый процесс внутри контейнера
@@ -115,7 +119,7 @@ $ docker inspect 5f2bf26e3524
 ### Docker kill & stop
 - **kill** сразу посылает SIGKILL
 - **stop** посылает SIGTERM, и через 10 секунд посылает SIGKILL
-- **SIGTERM** - сигнал остановки приложения 
+- **SIGTERM** - сигнал остановки приложения
 - **SIGKILL** - безусловное завершение процесса
 ```sh
 $ docker ps -q
@@ -152,9 +156,9 @@ gcloud init
 gcloud auth application-default login
 ```
 ### Docker machine
-- **docker-machine** - встроенный в докер инструмент для создания хостов и установки на них docker engine. Имеет поддержку облаков и систем виртуализации (Virtualbox, GCP и др.)  
+- **docker-machine** - встроенный в докер инструмент для создания хостов и установки на них docker engine. Имеет поддержку облаков и систем виртуализации (Virtualbox, GCP и др.)
 
-**Команда создания:** 
+**Команда создания:**
 ```sh
 $ export GOOGLE_PROJECT=_ваш-проект_
 $ docker-machine create --driver google --google-machine-image https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/family/ubuntu-1604-lts --google-machine-type n1-standard-1 --google-zone europe-west1-b docker-host
@@ -172,7 +176,7 @@ eval $(docker-machine env --unset)
 docker-machine rm <имя>
 ```
 - **docker-machine** создает хост для докер демона с указываемым образом в *--google-machine-image*. Образы, которые используются для построения докер контейнеров, к этому никак не относятся.
-- Все докер команды, которые запускаются в той же консоли после *eval $(docker-machine env <имя>)* работают с удаленным докер демоном в GCP.  
+- Все докер команды, которые запускаются в той же консоли после *eval $(docker-machine env <имя>)* работают с удаленным докер демоном в GCP.
 
 ```sh
 $ export GOOGLE_PROJECT=docker-666666
@@ -203,7 +207,7 @@ docker run --rm -ti tehbilly/htop
 ```sh
 docker run --rm --pid host -ti tehbilly/htop
 ```
-Выводит процессы хостовой машины, на которой запущен докер (т.е. процессы неймспейса хостовой машины)  
+Выводит процессы хостовой машины, на которой запущен докер (т.е. процессы неймспейса хостовой машины)
 
 - Создал в каталоге docker-monolith файлы:
   - [mongod.conf](https://gist.githubusercontent.com/Lisskha/790957b5e3b103fcae09a02626f6de25/raw/98e76c1d9084f37e05d9f37d17f8b0a6b0124d65/mongod.conf) - конфиг для mongodb
@@ -247,11 +251,11 @@ $ gcloud compute firewall-rules create reddit-app \
 --description="Allow PUMA connections" \
 --direction=INGRESS
 ```
-- Проверка  
+- Проверка
 http://35.240.64.47:9292/
 
 ### Docker Hub
-**[Docker hub](https://hub.docker.com/)** - облачный registry сервис от компании Docker  
+**[Docker hub](https://hub.docker.com/)** - облачный registry сервис от компании Docker
 - Аутентифицировался на докер хаб:
 ```sh
 $ docker login
@@ -275,7 +279,7 @@ $ docker ps -a
 CONTAINER ID        IMAGE                   COMMAND             CREATED              STATUS              PORTS                    NAMES
 40f026f1ba90        <my-login>/otus-reddit:1.0   "/start.sh"         About a minute ago   Up About a minute   0.0.0.0:9292->9292/tcp   reddit
 ```
-- Проверка  
+- Проверка
 http://localhost:9292/
 
 - **Команды:**
@@ -405,7 +409,7 @@ services:
     networks:
       - back_net
       - front_net
-    
+
 volumes:
   post_db:
 
@@ -432,11 +436,11 @@ USERNAME=playjim
 - Необходимые параметры для машины, на которой будем разворачивать Gitlab CI
   ```sh
   1               CPU
-  3.75GB          RAM 
-  50-100GB        HDD 
+  3.75GB          RAM
+  50-100GB        HDD
   Ubuntu 16.04    IMAGE
   ```
-  - В [официальной документации](https://docs.gitlab.com/ce/install/requirements.html) описаны рекомендуемые характеристики сервера 
+  - В [официальной документации](https://docs.gitlab.com/ce/install/requirements.html) описаны рекомендуемые характеристики сервера
 
 С помощью docker-machine создаем ВМ и не забываем разрешить подключение по http/https:
 ```
@@ -448,7 +452,7 @@ USERNAME=playjim
   gitlab-ci
     ...
   Docker is up and running!
-  To see how to connect your Docker Client to the Docker Engine running on this virtual machine, run: 
+  To see how to connect your Docker Client to the Docker Engine running on this virtual machine, run:
   docker-machine env gitlab-ci
 
 ```
@@ -457,7 +461,7 @@ USERNAME=playjim
   ```sh
   $ eval $(docker-machine env gitlab-ci)
   $ docker-machine ssh gitlab-ci
-  
+
   sudo su
   mkdir -p /srv/gitlab/config /srv/gitlab/data /srv/gitlab/logs
   cd /srv/gitlab/
@@ -467,14 +471,14 @@ USERNAME=playjim
   ```sh
   /srv/gitlab# docker-compose up -d
   ```
-- Откуда взяли содержимое файла docker-compose.yml - https://docs.gitlab.com/omnibus/docker/README.html#install-gitlab-using-docker-compose  
-- Проверка  
+- Откуда взяли содержимое файла docker-compose.yml - https://docs.gitlab.com/omnibus/docker/README.html#install-gitlab-using-docker-compose
+- Проверка
   http://ip-vm/
 
 ## Работа с Gitlab CI
 ### Настройка
 - Выкл регу новых юезров
-  - В Settings/General/Sign-up restrictions сняла галку с Sign-up enabled 
+  - В Settings/General/Sign-up restrictions сняла галку с Sign-up enabled
 ### Создание проекта
 ***Из лекции:***
 - Каждый проект в Gitlab CI принадлежит к группе проектов
@@ -503,7 +507,7 @@ docker exec -it gitlab-runner gitlab-runner register --run-untagged --locked=fal
 Правим правила фаервола на gcp. Открываем порты для Prometheus и Puma:
 ```
 $ gcloud compute firewall-rules create prometheus-default --allow tcp:9090
-$ gcloud compute firewall-rules create puma-default --allow tcp:9292 
+$ gcloud compute firewall-rules create puma-default --allow tcp:9292
 ```
 Создадим Docker хост в GCE и настроим локальное окружение на работу с ним:
 ```
@@ -523,14 +527,14 @@ eval $(docker-machine env docker-host)
 Docker контейнера. Для начального знакомства воспользуемся
 готовым образом с DockerHub.
 ```
-$ docker run --rm -p 9090:9090 -d --name prometheus prom/prometheus:v2.1.0 
-$ docker ps 
+$ docker run --rm -p 9090:9090 -d --name prometheus prom/prometheus:v2.1.0
+$ docker ps
 ```
 Открываем веб интерфейс. По умолчанию сервер слушает на порту 9090. Чтобы узнать ip созданной ВМ, используем команду:
 ```
 $ docker-machine ip docker-host
 ```
-Соберем на основе готового образа с DockerHub свой Docker образ с конфигурацией для мониторинга наших микросервисов. 
+Соберем на основе готового образа с DockerHub свой Docker образ с конфигурацией для мониторинга наших микросервисов.
 Создайте директорию monitoring/prometheus. Затем в этой директории создайте простой Dockerfile, который будет копировать файл конфигурации с нашей машины внутрь контейнера:
 ```
 #monitoring/prometheus/Dockerfile
@@ -565,9 +569,9 @@ scrape_configs:
 $ export USER_NAME=playjim
 $ docker build -t $USER_NAME/prometheus .
 ```
-Где USER_NAME - ВАШ логин от DockerHub. 
+Где USER_NAME - ВАШ логин от DockerHub.
 
-В коде микросервисов есть healthcheck-и для проверки работоспособности приложения. Сборку образов теперь необходимо производить при помощи скриптов **docker_build.sh**, которые есть в директории каждого сервиса. С его помощью мы добавим информацию из Git в наш healthcheck. 
+В коде микросервисов есть healthcheck-и для проверки работоспособности приложения. Сборку образов теперь необходимо производить при помощи скриптов **docker_build.sh**, которые есть в директории каждого сервиса. С его помощью мы добавим информацию из Git в наш healthcheck.
 
 Выполните сборку образов при помощи скриптов docker_build.sh в директории каждого сервиса.
 ```
@@ -599,11 +603,11 @@ services:
 
 volumes:
   prometheus_data:
-``` 
+```
 Не забываем добавить секцию networks для сервиса **prometheus**, чтобы он смог общаться со всеми серверами.
 
 ### Node exporter
-Воспользуемся [Node_exporter](https://github.com/prometheus/node_exporter) для сбора информации о работе Docker хоста (виртуалки, где у нас запущены контейнеры)и предоставлению этой информации в Prometheus. 
+Воспользуемся [Node_exporter](https://github.com/prometheus/node_exporter) для сбора информации о работе Docker хоста (виртуалки, где у нас запущены контейнеры)и предоставлению этой информации в Prometheus.
 
 ### Пуш образов на DockerHub
 Запушим собранные вами образы на DockerHub:
@@ -613,8 +617,8 @@ Login Succeeded
 $ docker push $USER_NAME/ui
 $ docker push $USER_NAME/comment
 $ docker push $USER_NAME/post
-$ docker push $USER_NAME/prometheus 
-``` 
+$ docker push $USER_NAME/prometheus
+```
 Ссылка на мой профиль в DockerHub: https://hub.docker.com/u/playjim
 
 [Содержание](#top)
@@ -876,7 +880,7 @@ networks:
 # Домашнее задание 19
 ## Kubernetes - The Hard Way
 
-Опишем приложение в контексте Kubernetes с помощью manifest-ов в YAML-формате. Основным примитивом будет Deployment. Основные задачи сущности Deployment:      
+Опишем приложение в контексте Kubernetes с помощью manifest-ов в YAML-формате. Основным примитивом будет Deployment. Основные задачи сущности Deployment:
  - Создание Replication Controller-а (следит, чтобы число запущенных Pod-ов соответствовало описанному);
  - Ведение истории версий запущенных Pod-ов (для различных стратегий деплоя, для возможностей отката);
  - Описание процесса деплоя (стратегия, параметры стратегий).
@@ -912,7 +916,7 @@ spec:
 
 [tmux] (https://github.com/tmux/tmux/wiki) можно использовать для одновременного запуска команд на нескольких экземплярах вычислений. Лабораторные работы в этом руководстве могут потребовать выполнения одних и тех же команд для нескольких вычислительных экземпляров, в этих случаях рассмотрите возможность использования tmux и разбиения окна на несколько панелей с включенными синхронизирующими панелями, чтобы ускорить процесс подготовки.
 
-> Разделить окно вертикально `ctrl + b "` 
+> Разделить окно вертикально `ctrl + b "`
 > Разделить окно горизонтально `ctrl + b %`
 > Включите синхронизацию, нажав `ctrl + b`, а затем` shift +: `. Далее введите `setw synchronize-panes on` в командной строке. Чтобы отключить синхронизацию: `setw synchronize-panes off`.
 Для управления мышью нужно создать конфиг ~/.tmux.conf:
@@ -1004,11 +1008,11 @@ gcloud compute ssh controller-0
 ```
 ## Provisioning a CA and Generating TLS Certificates
 
-### Certificate Authority  
+### Certificate Authority
 <details>
 <summary> Генерим CA конф файл, серт и приватный ключ</summary>
 <p>
- 
+
 ```sh
 $ cat > ca-config.json <<EOF
 {
@@ -1054,11 +1058,11 @@ $ ll
 -rw-r--r--    ca.pem
 ```
 </p>
-</details> 
+</details>
 
 ### Client and Server Certificates
 Генерим клиентские и серверные сертификаты для каждого компонента Kubernetes и клиентский сертификат для админа Kubernetes
-  
+
 <details>
 <summary> The Admin Client Certificate </summary>
 <p>
@@ -1097,7 +1101,7 @@ cfssl gencert \
 ```
 
 </p>
-</details>  
+</details>
 
 <details>
 <summary> The Kubelet Client Certificates </summary>
@@ -1149,7 +1153,7 @@ done
 ```
 
 </p>
-</details>  
+</details>
 
 <details>
 <summary> The Controller Manager Client Certificate </summary>
@@ -1189,7 +1193,7 @@ cfssl gencert \
 ```
 
 </p>
-</details>  
+</details>
 
 <details>
 <summary> The Kube Proxy Client Certificate </summary>
@@ -1229,7 +1233,7 @@ cfssl gencert \
 ```
 
 </p>
-</details>  
+</details>
 
 <details>
 <summary> The Scheduler Client Certificate </summary>
@@ -1269,7 +1273,7 @@ cfssl gencert \
 ```
 
 </p>
-</details>  
+</details>
 
 <details>
 <summary> The Kubernetes API Server Certificate </summary>
@@ -1317,9 +1321,9 @@ cfssl gencert \
 ```
 
 </p>
-</details> 
+</details>
 
-> The kubernetes-the-hard-way static IP address will be included in the list of subject alternative names for the Kubernetes API Server certificate. This will ensure the certificate can be validated by remote clients.  
+> The kubernetes-the-hard-way static IP address will be included in the list of subject alternative names for the Kubernetes API Server certificate. This will ensure the certificate can be validated by remote clients.
 
 > The Kubernetes API server is automatically assigned the kubernetes internal dns name, which will be linked to the first IP address (10.32.0.1) from the address range (10.32.0.0/24) reserved for internal cluster services during the [control plane bootstrapping](https://github.com/kelseyhightower/kubernetes-the-hard-way/blob/master/docs/08-bootstrapping-kubernetes-controllers.md#configure-the-kubernetes-api-server) lab.
 
@@ -1361,7 +1365,7 @@ cfssl gencert \
 ```
 
 </p>
-</details>  
+</details>
 
 ### Distribute the Client and Server Certificates
 - Копируем серты и ключи на воркеры
@@ -1379,8 +1383,8 @@ done
 ```
 ## Генерация конфигурационных файлов Kubernetes для аутентификации
 ### Client Authentication Configs
-Будем генерить kubeconfig файлы для `controller manager`, `kubelet`, `kube-proxy`, планировщика и админа.  
-- **`Kubernetes Public IP Address`**  
+Будем генерить kubeconfig файлы для `controller manager`, `kubelet`, `kube-proxy`, планировщика и админа.
+- **`Kubernetes Public IP Address`**
   Каждому kubeconfig нужно канекаться к Kubernetes API Server. Для доступности заасайним статик ip на внешний LB за которым будет Kubernetes API Servers
     - Извлечь статик IP
       ```sh
@@ -1388,9 +1392,9 @@ done
       --region $(gcloud config get-value compute/region) \
       --format 'value(address)')
       ```
-- **`The kubelet Kubernetes Configuration File`**  
-  При создании файлов kubeconfig для Kubelets должен использоваться сертификат клиента, соответствующий имени узла Kubelet. Тогда будет норм работать Kubernetes [Node Authorizer](https://kubernetes.io/docs/reference/access-authn-authz/node/)  
-  > Команды нужно запускать в той же дире, где генерили серты в разделе [Provisioning a CA and Generating TLS Certificates](#Provisioning-a-CA-and-Generating-TLS-Certificates) 
+- **`The kubelet Kubernetes Configuration File`**
+  При создании файлов kubeconfig для Kubelets должен использоваться сертификат клиента, соответствующий имени узла Kubelet. Тогда будет норм работать Kubernetes [Node Authorizer](https://kubernetes.io/docs/reference/access-authn-authz/node/)
+  > Команды нужно запускать в той же дире, где генерили серты в разделе [Provisioning a CA and Generating TLS Certificates](#Provisioning-a-CA-and-Generating-TLS-Certificates)
     - Генерация kubeconfig файлов для каждого воркера
       ```sh
       for instance in worker-0 worker-1 worker-2; do kubectl config set-cluster kubernetes-the-hard-way \
@@ -1440,7 +1444,7 @@ done
     --kubeconfig=kube-proxy.kubeconfig
 
     kubectl config use-context default --kubeconfig=kube-proxy.kubeconfig
-    ``` 
+    ```
   - Создался файл
     ```
     -rw-------   kube-proxy.kubeconfig
@@ -1538,8 +1542,8 @@ for instance in controller-0 controller-1 controller-2; do
 done
 ```
 ## Generating the Data Encryption Config and Key
-Kubernetes хранит различные данные, включая состояние кластера, конфиги приложенией и секреты. Kubernetes поддерживает возможность [шифрования данных](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) кластера в состоянии покоя.  
-Создадим ключ шифрования и [encryption config](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/#understanding-the-encryption-at-rest-configuration), подходящие для шифрования Kubernetes Secrets 
+Kubernetes хранит различные данные, включая состояние кластера, конфиги приложенией и секреты. Kubernetes поддерживает возможность [шифрования данных](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) кластера в состоянии покоя.
+Создадим ключ шифрования и [encryption config](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/#understanding-the-encryption-at-rest-configuration), подходящие для шифрования Kubernetes Secrets
 
 ### The Encryption Key
 ```sh
@@ -1645,7 +1649,7 @@ EOF
 ```
 
 </p>
-</details>  
+</details>
 
 ```sh
 sudo systemctl daemon-reload
@@ -1681,7 +1685,7 @@ $ gcloud compute ssh controller-2
 ```
 
 ### Provision the Kubernetes Control Plane
-- Create the Kubernetes configuration directory  
+- Create the Kubernetes configuration directory
   `sudo mkdir -p /etc/kubernetes/config`
 - Download the official Kubernetes release binaries
 ```sh
@@ -1760,9 +1764,9 @@ EOF
 ```
 
 </p>
-</details>  
+</details>
 
-**`Configure the Kubernetes Controller Manager`**  
+**`Configure the Kubernetes Controller Manager`**
 - Move the kube-controller-manager kubeconfig into place and create the `kube-controller-manager.service` systemd unit file
 ```sh
 sudo mv kube-controller-manager.kubeconfig /var/lib/kubernetes/
@@ -1800,9 +1804,9 @@ EOF
 ```
 
 </p>
-</details>  
+</details>
 
-**`Configure the Kubernetes Scheduler`**  
+**`Configure the Kubernetes Scheduler`**
 - Move the kube-scheduler kubeconfig into place and create the `kube-scheduler.yaml` configuration file
 ```sh
 sudo mv kube-scheduler.kubeconfig /var/lib/kubernetes/
@@ -1836,7 +1840,7 @@ WantedBy=multi-user.target
 EOF
 ```
 
-**`Start the Controller Services`**  
+**`Start the Controller Services`**
 ```sh
 sudo systemctl daemon-reload
 sudo systemctl enable kube-apiserver kube-controller-manager kube-scheduler
@@ -1845,9 +1849,9 @@ sudo systemctl start kube-apiserver kube-controller-manager kube-scheduler
 
 ### Enable HTTP Health Checks
 
-A [Google Network Load Balancer](https://cloud.google.com/load-balancing/docs/network/) will be used to distribute traffic across the three API servers and allow each API server to terminate TLS connections and validate client certificates. The network load balancer only supports HTTP health checks which means the HTTPS endpoint exposed by the API server cannot be used. As a workaround the nginx webserver can be used to proxy HTTP health checks. In this section nginx will be installed and configured to accept HTTP health checks on port 80 and proxy the connections to the API server on https://127.0.0.1:6443/healthz  
+A [Google Network Load Balancer](https://cloud.google.com/load-balancing/docs/network/) will be used to distribute traffic across the three API servers and allow each API server to terminate TLS connections and validate client certificates. The network load balancer only supports HTTP health checks which means the HTTPS endpoint exposed by the API server cannot be used. As a workaround the nginx webserver can be used to proxy HTTP health checks. In this section nginx will be installed and configured to accept HTTP health checks on port 80 and proxy the connections to the API server on https://127.0.0.1:6443/healthz
 
-> The /healthz API server endpoint does not require authentication by default  
+> The /healthz API server endpoint does not require authentication by default
 
 Установим базовый веб-сервер для хелсчеков
 ```sh
@@ -1913,7 +1917,7 @@ In this section you will configure RBAC permissions to allow the Kubernetes API 
 ```sh
 gcloud compute ssh controller-0
 ```
-Создаем `system:kube-apiserver-to-kubelet` [Cluster Role](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#role-and-clusterrole) с разрешениями для доступа к API Kubelet и выполнения наиболее распространенных задач, связанных с управлением подами 
+Создаем `system:kube-apiserver-to-kubelet` [Cluster Role](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#role-and-clusterrole) с разрешениями для доступа к API Kubelet и выполнения наиболее распространенных задач, связанных с управлением подами
 ```sh
 cat <<EOF | kubectl apply --kubeconfig admin.kubeconfig -f -
 apiVersion: rbac.authorization.k8s.io/v1beta1
@@ -1937,7 +1941,7 @@ rules:
       - "*"
 EOF
 ```
-Kubernetes API Server аутентифицируется в Kubelet как пользователь `kubernetes`, используя сертификат клиента, как определено флагом `--kubelet-client-certificate`  
+Kubernetes API Server аутентифицируется в Kubelet как пользователь `kubernetes`, используя сертификат клиента, как определено флагом `--kubelet-client-certificate`
 Bind the `system:kube-apiserver-to-kubelet` ClusterRole to the `kubernetes` user
 ```sh
 cat <<EOF | kubectl apply --kubeconfig admin.kubeconfig -f -
@@ -1992,7 +1996,7 @@ gcloud compute forwarding-rules create kubernetes-forwarding-rule \
   --target-pool kubernetes-target-pool
 ```
 
-**`Verification`**  
+**`Verification`**
 > The compute instances created in this tutorial will not have permission to complete this section. Run the following commands from the same machine used to create the compute instances.
 
 - Получаем статик IP `kubernetes-the-hard-way`
@@ -2019,7 +2023,7 @@ curl --cacert ca.pem https://${KUBERNETES_PUBLIC_ADDRESS}:6443/version
 ```
 ## Bootstrapping the Kubernetes Worker Nodes
 
-Будем бутстрапить воркеры. На каждой ноде будут установлены: 
+Будем бутстрапить воркеры. На каждой ноде будут установлены:
 - [runc](https://github.com/opencontainers/runc)
 - [container networking plugins](https://github.com/containernetworking/cni)
 - [containerd](https://github.com/containerd/containerd)
@@ -2080,7 +2084,7 @@ tar -xvf crictl-v1.15.0-linux-amd64.tar.gz
 tar -xvf containerd-1.2.9.linux-amd64.tar.gz -C containerd
 sudo tar -xvf cni-plugins-linux-amd64-v0.8.2.tgz -C /opt/cni/bin/
 sudo mv runc.amd64 runc
-chmod +x crictl kubectl kube-proxy kubelet runc 
+chmod +x crictl kubectl kube-proxy kubelet runc
 sudo mv crictl kubectl kube-proxy kubelet runc /usr/local/bin/
 sudo mv containerd/bin/* /bin/
 ```
@@ -2636,7 +2640,7 @@ c Kubernetes API (все, что делает kubectl, можно
 2) Директории **~/.kube** - содержит служебную инфу
 для kubectl (конфиги, кеши, схемы API)
 3) **minikube** - утилиты для разворачивания локальной
-инсталляции Kubernetes. 
+инсталляции Kubernetes.
 
 ## Kubectl
 Устанавливаю [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
@@ -2660,7 +2664,7 @@ $ minikube start
 💾  Downloading kubectl v1.17.2
 💾  Downloading kubelet v1.17.2
 💾  Downloading kubeadm v1.17.2
-🚀  Launching Kubernetes ... 
+🚀  Launching Kubernetes ...
 🌟  Enabling addons: default-storageclass, storage-provisioner
 ⌛  Waiting for cluster to come online ...
 🏄  Done! kubectl is now configured to use "minikube"
@@ -2683,10 +2687,10 @@ minikube   Ready    master   18m   v1.17.2
 Контекст - это комбинация:
 1) cluster - API-сервер
 2) user - пользователь для подключения к кластеру
-3) namespace - область видимости (не обязательно, поумолчанию default) 
+3) namespace - область видимости (не обязательно, поумолчанию default)
 Информацию о контекстах kubectl сохраняет в файле ```~/.kube/config```:
 ```
-$ cat ~/.kube/config 
+$ cat ~/.kube/config
 apiVersion: v1
 clusters:
 - cluster:
@@ -2718,10 +2722,10 @@ users:
 Пользователь (user) - это:
 1) Данные для аутентификации (зависит от того, как настроен
 сервер). Это могут быть:
-• username + password (Basic Auth
-• client key + client certificate
-• token
-• auth-provider config (например GCP)
+- username + password (Basic Auth
+- client key + client certificate
+- token
+- auth-provider config (например GCP)
 + name (Имя) для идентификации в конфиге
 
 Контекст (контекст) - это:
@@ -2746,16 +2750,16 @@ $ kubectl config use-context context_name
 
 Таким образом kubectl конфигурируется для подключения к
 разным кластерам, под разными пользователями.
-Текущий контекст можно увидеть так: 
+Текущий контекст можно увидеть так:
 ```
 $ kubectl config current-context
 minikube
 ```
-Список всех контекстов можно увидеть так: 
+Список всех контекстов можно увидеть так:
 ```
 $ kubectl config get-contexts
 CURRENT   NAME       CLUSTER    AUTHINFO   NAMESPACE
-*         minikube   minikube   minikube   
+*         minikube   minikube   minikube
 ```
 
 ## Запуск приложения reddit
@@ -2797,5 +2801,286 @@ $ minikube service list
 ```
 $ minikube addons list
 ```
+
+<a name="hw21"></a>
+# Домашнее задание 21
+## Kubernetes. Networks ,Storages.
+### План
+- Ingress Controller
+- Ingress
+- Secret
+- TLS
+- LoadBalancer Service
+- Network Policies
+- PersistentVolumes
+- PersistentVolumeClaims
+
+### Service - определяет конечные узлы доступа (Endpoint’ы):
+- селекторные сервисы (k8s сам находит POD-ы по label’ам)
+- безселекторные сервисы (мы вручную описываем
+конкретные endpoint’ы)
+
+и способ коммуникации с ними (тип (type) сервиса):
+- ClusterIP - дойти до сервиса можно только изнутри
+кластера
+- nodePort - клиент снаружи кластера приходит на
+опубликованный порт
+- LoadBalancer - клиент приходит на облачный (aws elb,
+Google gclb) ресурс балансировки
+- ExternalName - внешний ресурс по отношению к кластеру
+
+**ClusterIP** - это виртуальный (в реальности нет интерфейса,
+pod’а или машины с таким адресом) IP-адрес из диапазона
+адресов для работы внутри, скрывающий за собой IP-адреса
+реальных POD-ов. Сервису любого типа (кроме
+ExternalName) назначается этот IP-адрес.
+
+Kubernetes не имеет своего собственного DNSсервера для разрешения имен. Поэтому используется плагин
+**kube-dns** (это тоже Pod).
+Его задачи:
+- ходить в API Kubernetes’a и отслеживать Service-объекты
+- заносить DNS-записи о Service’ах в собственную базу
+- предоставлять DNS-сервис для разрешения имен в IP-адреса
+(как внутренних, так и внешних)
+
+Service с типом **NodePort** - похож на сервис типа
+ClusterIP, только к нему прибавляется прослушивание
+портов нод (всех нод) для доступа к сервисам снаружи.
+При этом ClusterIP также назначается этому сервису для
+доступа к нему изнутри кластера.
+**kube-proxy** прослушивается либо заданный порт
+(nodePort: 32092), либо порт из диапазона 30000-32670.
+Дальше IPTables решает, на какой Pod попадет трафик.
+
+Тип **LoadBalancer** позволяет нам использовать **внешний
+облачный** балансировщик нагрузки как единую точку
+входа в наши сервисы, а не полагаться на IPTables и не
+открывать наружу весь кластер.
+
+Для более удобного управления входящим
+снаружи трафиком и решения недостатков
+LoadBalancer можно использовать другой объект
+Kubernetes - **Ingress**.
+
+**Ingress** – это набор правил внутри кластера Kubernetes,
+предназначенных для того, чтобы входящие подключения
+могли достичь сервисов (Services)
+
+Сами по себе Ingress’ы это просто правила. Для их
+применения нужен **Ingress Controller**
+
+**NetworkPolicy** - инструмент
+для декларативного описания потоков трафика.
+
+Вместо того, чтобы хранить данные локально на ноде, имеет смысл
+подключить удаленное хранилище. В нашем случае можем
+использовать Volume gcePersistentDisk, который будет складывать
+данные в хранилище GCE.
+
+
+<a name="hw22"></a>
+# Домашнее задание 22
+## Kubernetes. CI/CD в Kubernetes
+### План
+ - Работа с Helm
+ - Развертывание Gitlab в Kubernetes
+ - Запуск CI/CD конвейера в Kubernetes
+
+**Helm** - пакетный менеджер для Kubernetes.
+С его помощью мы будем:
+1. Стандартизировать поставку приложения в Kubernetes
+2. Декларировать инфраструктуру
+3. Деплоить новые версии приложения
+
+Helm - клиент-серверное приложение. Установим его клиентскую часть - консольный клиент Helm.
+
+```console
+brew install helm@2
+cd /usr/local/bin
+ln -s /usr/local/opt/helm@2/bin/tiller tiller
+ln -s /usr/local/opt/helm@2/bin/helm helm2
+```
+
+Helm читает конфигурацию kubectl (~/.kube/config) и сам определяет текущий контекст (кластер, пользователь, неймспейс).
+
+Если потребуется сменить кластер, то либо меняем контекст с помощью:
+
+```console
+kubectl config set-context
+```
+
+либо подгружаем helm’у собственный config-файл флагом --kube-context.
+
+Установим серверную часть Helm’а - Tiller.
+
+Tiller - это аддон Kubernetes, т.е. Pod, который общается с API Kubernetes.
+
+> Для этого понадобится ему выдать ServiceAccount и назначить роли RBAC, необходимые для работы.
+### Charts
+
+Chart - это пакет в Helm.
+
+### Templates
+
+Основным содержимым Chart’ов являются шаблоны манифестов Kubernetes.
+
+- Создадим директорию ui/templates
+- Перенесем в неё все манифесты, разработанные ранее для сервиса ui (ui-service, ui-deployment, ui-ingress)
+- Переименуем их (уберем префикс “ui-“) и поменяем расширение на .yaml) - стилистические правки
+```console
+└── ui
+ ├── Chart.yaml
+ ├── templates
+ │   ├── deployment.yaml
+ │   ├── ingress.yaml
+ │   └── service.yaml
+```
+По-сути, это уже готовый пакет для установки в Kubernetes:
+
+- Убедимся, что у вас не развернуты компоненты приложения в kubernetes. Если развернуты - удалим их
+- Установим Chart
+
+```console
+helm install --name test-ui-1 ui/
+```
+- Передаем имя и путь до Chart'a соответсвенно. Посмотрим, что получилось
+
+```console
+helm ls
+```
+<a name="hw23"></a>
+# Домашнее задание 23
+## Kubernetes. Мониторинг и логирование
+### План
+- Развертывание Prometheus в k8s
+- Настройка Prometheus и Grafana для сбора метрик
+- Настройка EFK для сбора логов
+
+Из Helm-чарта установим ingress-контроллер nginx:
+```
+$ kubectl apply -f kubernetes/reddit/tiller.yml
+$ helm init --service-account tiller
+$ helm install stable/nginx-ingress --name nginx
+```
+ip-адрес выданный nginx добавляю в /etc/hosts
+```
+$ kubectl get svc
+NAME                                  TYPE           CLUSTER-IP   EXTERNAL-IP     PORT(S)                      AGE
+kubernetes                            ClusterIP      10.0.0.1     <none>          443/TCP                      10m
+nginx-nginx-ingress-controller        LoadBalancer   10.0.6.149   35.198.70.111   80:31528/TCP,443:30314/TCP   2m57s
+nginx-nginx-ingress-default-backend   ClusterIP      10.0.9.107   <none>          80/TCP                       2m57s
+```
+### Установим Prometheus
+```
+$ cd kubernetes/Charts && helm fetch --untar stable/prometheus
+```
+Create in to chart directory file custom_values.yml
+main differences in the custom_values file:
+ - отключена часть устанавливаемых сервисов (pushgateway,
+ - alertmanager, kube-state-metrics)
+ - включено создание Ingress’а для подключения через nginx
+ - поправлен endpoint для сбора метрик cadvisor
+ - уменьшен интервал сбора метрик (с 1 минуты до 30 секунд)
+
+Запуск Прометеус:
+```
+helm upgrade prom . -f custom_values.yml --install
+```
+install grafana:
+```
+helm upgrade --install grafana stable/grafana --set "adminPassword=admin" \
+--set "service.type=NodePort" \
+--set "ingress.enabled=true" \
+--set "ingress.hosts={reddit-grafana}"
+```
+> http://reddit-grafana/
+> user: admin
+> pass: admin
+
+Добавим prometheus data-source в GUi.
+
+Адрес найдем из имени сервиса prometheus сервера:
+
+```console
+kubectl get svc
+```
+
+Добавим самый [распространенный dashboard](https://grafana.com/grafana/dashboards/315) для отслеживания состояния ресурсов k8s.
+
+Добавьте собственные дашборды, созданные ранее (в ДЗ по мониторингу). Они должны также успешно отобразить данные.
+
+### Templating
+
+В текущий момент на графиках, относящихся к приложению, одновременно отображены значения метрик со всех источников сразу. При большом количестве сред и при их динамичном изменении имеет смысл сделать динамичной и удобно настройку наших дашбордов в Grafana.
+
+Сделать это можно в нашем случае с помощью механизма templating’а.
+
+- создадмим новую переменную
+- Name: namespace
+- Label: Env
+- Type: Query
+- Quary: label_values(namespace) - получить значения всех label-ов kubernetes_namespace
+- Regex: /.+/ - отфильтруем (уберем пустой namespace)
+- Multi-value - checked - возможность выбирать несколько значений
+- Include All option - checked - возножность выбирать все значения одной кнопкой
+
+У нас появился список со значениями переменной.
+
+Пока что они бесполезны. Чтобы их использование имело эффект нужно шаблонизировать запросы к Prometheus.
+
+Меняем запрос в графиках на: {kubernetes_namespace=~"$namespace"}
+
+Теперь мы можем настраивать общие шаблоны графиков и с помощью переменных менять в них нужные нам поля (в нашем случае это namespace).
+
+Параметризуем все Dashboard’ы, отражающие параметры работы приложения (созданные нами в предыдущих ДЗ) reddit для работы с несколькими окружениями (неймспейсами).
+
+Получившиеся дашборды сохраним в репозиторий ./kubernetes/Grafana/Dashboards/.
+
+### Смешанные графики
+
+Импортируем следующий график: [https://grafana.com/dashboards/741](https://grafana.com/dashboards/741)
+
+На этом графике одновременно используются метрики и шаблоны из cAdvisor, и из kube-state-metrics для отображения сводной информации по деплойментам.
+
+### Логирование
+Добавим label самой мощной ноде в кластере:
+
+```
+$ kubectl label node gke-cluster-1-default-pool-20c17a34-vsd8 elastichost=true
+
+node/gke-cluster-1-default-pool-20c17a34-vsd8 labeled
+```
+Логирование в k8s будем выстраивать с помощью уже известного стека EFK:
+
+- ElasticSearch - база данных + поисковый движок
+- Fluentd - шипер (отправитель) и агрегатор логов
+- Kibana - веб-интерфейс для запросов в хранилище и отображения их результатов
+
+Создадим файлы в новой папке kubernetes/efk/:
+
+- fluentd-ds.yaml
+- fluentd-configmap.yaml
+- es-service.yaml
+- es-statefulSet.yaml
+- es-pvc.yaml
+
+Запустим стек в вашем k8s:
+
+```console
+kubectl apply -f ./efk
+```
+
+Kibana поставим из helm чарта:
+
+```console
+helm upgrade --install kibana stable/kibana \
+--set "ingress.enabled=true" \
+--set "ingress.hosts={reddit-kibana}" \
+--set "env.ELASTICSEARCH_URL=http://elasticsearch-logging:9200" \
+--set "service.type=NodePort" \
+--version 0.1.1
+```
+
+> http://reddit-kibana/
 
 [Содержание](#top)
