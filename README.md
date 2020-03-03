@@ -3082,4 +3082,5 @@ helm upgrade --install kibana stable/kibana \
 ```
 
 > http://reddit-kibana/
+
 [Содержание](#top)
