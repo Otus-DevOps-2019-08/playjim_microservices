@@ -15,6 +15,8 @@
 - [HW.20 - Kubernetes. Запуск кластера и приложения. Модель безопасности.](#hw20)
 - [HW.21 - Kubernetes. Networks ,Storages.](#hw21)
 - [HW.22 - Kubernetes. CI/CD в Kubernetes](#hw22)
+- [HW.23 - Kubernetes. Мониторинг и логирование](#hw23)
+
 ---
 
 <a name="hw12"></a>
@@ -2890,5 +2892,194 @@ Kubernetes - **Ingress**.
 2. Декларировать инфраструктуру
 3. Деплоить новые версии приложения
 
+Helm - клиент-серверное приложение. Установим его клиентскую часть - консольный клиент Helm.
 
+```console
+brew install helm@2
+cd /usr/local/bin
+ln -s /usr/local/opt/helm@2/bin/tiller tiller
+ln -s /usr/local/opt/helm@2/bin/helm helm2
+```
+
+Helm читает конфигурацию kubectl (~/.kube/config) и сам определяет текущий контекст (кластер, пользователь, неймспейс).
+
+Если потребуется сменить кластер, то либо меняем контекст с помощью:
+
+```console
+kubectl config set-context
+```
+
+либо подгружаем helm’у собственный config-файл флагом --kube-context.
+
+Установим серверную часть Helm’а - Tiller.
+
+Tiller - это аддон Kubernetes, т.е. Pod, который общается с API Kubernetes.
+
+> Для этого понадобится ему выдать ServiceAccount и назначить роли RBAC, необходимые для работы.
+### Charts
+
+Chart - это пакет в Helm.
+
+### Templates
+
+Основным содержимым Chart’ов являются шаблоны манифестов Kubernetes.
+
+- Создадим директорию ui/templates
+- Перенесем в неё все манифесты, разработанные ранее для сервиса ui (ui-service, ui-deployment, ui-ingress)
+- Переименуем их (уберем префикс “ui-“) и поменяем расширение на .yaml) - стилистические правки
+```console
+└── ui
+ ├── Chart.yaml
+ ├── templates
+ │   ├── deployment.yaml
+ │   ├── ingress.yaml
+ │   └── service.yaml
+```
+По-сути, это уже готовый пакет для установки в Kubernetes:
+
+- Убедимся, что у вас не развернуты компоненты приложения в kubernetes. Если развернуты - удалим их
+- Установим Chart
+
+```console
+helm install --name test-ui-1 ui/
+```
+- Передаем имя и путь до Chart'a соответсвенно. Посмотрим, что получилось
+
+```console
+helm ls
+```
+<a name="hw23"></a>
+# Домашнее задание 23
+## Kubernetes. Мониторинг и логирование
+### План
+- Развертывание Prometheus в k8s
+- Настройка Prometheus и Grafana для сбора метрик
+- Настройка EFK для сбора логов
+
+Из Helm-чарта установим ingress-контроллер nginx:
+```
+$ kubectl apply -f kubernetes/reddit/tiller.yml
+$ helm init --service-account tiller
+$ helm install stable/nginx-ingress --name nginx
+```
+ip-адрес выданный nginx добавляю в /etc/hosts
+```
+$ kubectl get svc
+NAME                                  TYPE           CLUSTER-IP   EXTERNAL-IP     PORT(S)                      AGE
+kubernetes                            ClusterIP      10.0.0.1     <none>          443/TCP                      10m
+nginx-nginx-ingress-controller        LoadBalancer   10.0.6.149   35.198.70.111   80:31528/TCP,443:30314/TCP   2m57s
+nginx-nginx-ingress-default-backend   ClusterIP      10.0.9.107   <none>          80/TCP                       2m57s
+```
+### Установим Prometheus
+```
+$ cd kubernetes/Charts && helm fetch --untar stable/prometheus
+```
+Create in to chart directory file custom_values.yml
+main differences in the custom_values file:
+ - отключена часть устанавливаемых сервисов (pushgateway,
+ - alertmanager, kube-state-metrics)
+ - включено создание Ingress’а для подключения через nginx
+ - поправлен endpoint для сбора метрик cadvisor
+ - уменьшен интервал сбора метрик (с 1 минуты до 30 секунд)
+
+Запуск Прометеус:
+```
+helm upgrade prom . -f custom_values.yml --install
+```
+install grafana:
+```
+helm upgrade --install grafana stable/grafana --set "adminPassword=admin" \
+--set "service.type=NodePort" \
+--set "ingress.enabled=true" \
+--set "ingress.hosts={reddit-grafana}"
+```
+> http://reddit-grafana/
+> user: admin
+> pass: admin
+
+Добавим prometheus data-source в GUi.
+
+Адрес найдем из имени сервиса prometheus сервера:
+
+```console
+kubectl get svc
+```
+
+Добавим самый [распространенный dashboard](https://grafana.com/grafana/dashboards/315) для отслеживания состояния ресурсов k8s.
+
+Добавьте собственные дашборды, созданные ранее (в ДЗ по мониторингу). Они должны также успешно отобразить данные.
+
+### Templating
+
+В текущий момент на графиках, относящихся к приложению, одновременно отображены значения метрик со всех источников сразу. При большом количестве сред и при их динамичном изменении имеет смысл сделать динамичной и удобно настройку наших дашбордов в Grafana.
+
+Сделать это можно в нашем случае с помощью механизма templating’а.
+
+- создадмим новую переменную
+- Name: namespace
+- Label: Env
+- Type: Query
+- Quary: label_values(namespace) - получить значения всех label-ов kubernetes_namespace
+- Regex: /.+/ - отфильтруем (уберем пустой namespace)
+- Multi-value - checked - возможность выбирать несколько значений
+- Include All option - checked - возножность выбирать все значения одной кнопкой
+
+У нас появился список со значениями переменной.
+
+Пока что они бесполезны. Чтобы их использование имело эффект нужно шаблонизировать запросы к Prometheus.
+
+Меняем запрос в графиках на: {kubernetes_namespace=~"$namespace"}
+
+Теперь мы можем настраивать общие шаблоны графиков и с помощью переменных менять в них нужные нам поля (в нашем случае это namespace).
+
+Параметризуем все Dashboard’ы, отражающие параметры работы приложения (созданные нами в предыдущих ДЗ) reddit для работы с несколькими окружениями (неймспейсами).
+
+Получившиеся дашборды сохраним в репозиторий ./kubernetes/Grafana/Dashboards/.
+
+### Смешанные графики
+
+Импортируем следующий график: [https://grafana.com/dashboards/741](https://grafana.com/dashboards/741)
+
+На этом графике одновременно используются метрики и шаблоны из cAdvisor, и из kube-state-metrics для отображения сводной информации по деплойментам.
+
+### Логирование
+Добавим label самой мощной ноде в кластере:
+
+```
+$ kubectl label node gke-cluster-1-default-pool-20c17a34-vsd8 elastichost=true
+
+node/gke-cluster-1-default-pool-20c17a34-vsd8 labeled
+```
+Логирование в k8s будем выстраивать с помощью уже известного стека EFK:
+
+- ElasticSearch - база данных + поисковый движок
+- Fluentd - шипер (отправитель) и агрегатор логов
+- Kibana - веб-интерфейс для запросов в хранилище и отображения их результатов
+
+Создадим файлы в новой папке kubernetes/efk/:
+
+- fluentd-ds.yaml
+- fluentd-configmap.yaml
+- es-service.yaml
+- es-statefulSet.yaml
+- es-pvc.yaml
+
+Запустим стек в вашем k8s:
+
+```console
+kubectl apply -f ./efk
+```
+
+Kibana поставим из helm чарта:
+
+```console
+helm upgrade --install kibana stable/kibana \
+--set "ingress.enabled=true" \
+--set "ingress.hosts={reddit-kibana}" \
+--set "env.ELASTICSEARCH_URL=http://elasticsearch-logging:9200" \
+--set "service.type=NodePort" \
+--version 0.1.1
+```
+
+> http://reddit-kibana/
 [Содержание](#top)
